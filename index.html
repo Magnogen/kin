@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kin | Magnogen</title>
+    <meta name="description" content="Construct Family Trees with Kin!" />
+    <link rel="shortcut icon" href="https://magnogen.net/src/favicon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    
+    <script src="https://src.magnogen.net/dom.js"></script>
+    <script type="module" src="sketch.js"></script>
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel editor-panel" aria-label="Code editor">
+        <header class="panel-header">
+          <h1>Editor</h1>
+          <div class="header-controls">
+            <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">
+              Dark mode
+            </button>
+          </div>
+        </header>
+
+        <div class="editor-shell">
+          <pre id="highlight-layer" aria-hidden="true"></pre>
+          <textarea
+            id="editor"
+            spellcheck="false"
+            autocomplete="off"
+            autocapitalize="off"
+            aria-label="Code input"
+            placeholder="Type your code here..."
+          ></textarea>
+        </div>
+      </section>
+
+      <section class="panel canvas-panel" aria-label="Canvas preview">
+        <header class="panel-header">
+          <h2>Canvas</h2>
+        </header>
+        <canvas id="preview-canvas"></canvas>
+      </section>
+    </main>
+  </body>
+</html>

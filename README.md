@@ -1,4 +1,4 @@
-# KinML Language Specification
+# Kin Language Specification
 
 Version 0.1 - Draft
 
@@ -6,16 +6,16 @@ Version 0.1 - Draft
 
 ## 1. Introduction
 
-KinML is a human-readable language for describing people and their relationships.
+Kin is a human-readable language for describing people and their relationships.
 It is designed to support incomplete, uncertain, and evolving information and to be authored directly by humans.
 
-KinML prioritizes simplicity, linearity, and tolerance of ambiguity over strict validation.
+Kin prioritizes simplicity, linearity, and tolerance of ambiguity over strict validation.
 
 ---
 
 ## 2. Design Goals
 
-KinML is designed to be:
+Kin is designed to be:
 
 - human-authored and human-readable
 - tolerant of unknown or partial information
