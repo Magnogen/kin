@@ -47,10 +47,12 @@ body {
 
 .layout {
 	min-height: 100vh;
+	height: 100vh;
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: minmax(300px, 1.1fr) minmax(300px, 0.9fr);
 	gap: 16px;
 	padding: 16px;
+	overflow: hidden;
 }
 
 .panel {
@@ -160,9 +162,21 @@ body {
 	background: var(--canvas-bg);
 }
 
+.token-debug {
+	margin: 0;
+	padding: 14px;
+	flex: 1;
+	overflow: auto;
+	font: 500 13px/1.5 "IBM Plex Mono", "Consolas", monospace;
+	color: var(--ink);
+	background: var(--editor-shell-bg);
+	white-space: pre;
+	border-top: 1px solid var(--line);
+}
+
 @media (max-width: 900px) {
 	.layout {
 		grid-template-columns: 1fr;
-		grid-template-rows: 48vh 48vh;
+		grid-template-rows: 4fr 3.5fr;
 	}
 }

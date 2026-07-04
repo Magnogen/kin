@@ -32,7 +32,7 @@ export function initializeThemeToggle(toggleButton, onThemeChange) {
     return;
   }
 
-  toggleButton.addEventListener("click", () => {
+  toggleButton.on("click", () => {
     const currentTheme = document.documentElement.dataset.theme;
     const nextTheme = currentTheme === "dark" ? "light" : "dark";
     applyTheme(nextTheme, toggleButton, onThemeChange, true);
