@@ -106,7 +106,6 @@ function buildUnionComponentsForGeneration(
   personIds,
   unions,
   unionGeneration,
-  personGeneration,
   generation
 ) {
   const personSet = new Set(personIds);
@@ -134,45 +133,6 @@ function buildUnionComponentsForGeneration(
       const memberId = members[i];
       adjacency.get(anchor).add(memberId);
       adjacency.get(memberId).add(anchor);
-    }
-  });
-
-  const partneredPeople = new Set();
-  unions.forEach((union) => {
-    if ((unionGeneration.get(union.id) ?? 0) !== generation) {
-      return;
-    }
-
-    const members = (union.members || [])
-      .map((member) => member.personId)
-      .filter((personId) => personSet.has(personId));
-
-    if (members.length < 2) {
-      return;
-    }
-
-    members.forEach((personId) => partneredPeople.add(personId));
-  });
-
-  unions.forEach((union) => {
-    const children = (union.children || [])
-      .map((child) => child.personId)
-      .filter(
-        (personId) =>
-          personSet.has(personId) &&
-          (personGeneration.get(personId) ?? 0) === generation &&
-          !partneredPeople.has(personId)
-      );
-
-    if (children.length < 2) {
-      return;
-    }
-
-    const anchor = children[0];
-    for (let i = 1; i < children.length; i += 1) {
-      const childId = children[i];
-      adjacency.get(anchor).add(childId);
-      adjacency.get(childId).add(anchor);
     }
   });
 
@@ -207,9 +167,35 @@ function buildUnionComponentsForGeneration(
   return components;
 }
 
-function compactGenerationIntoBlocks(personIds, componentMap, xByPersonId, pinnedByPersonId, minGap) {
+function compactGenerationIntoBlocks(
+  personIds,
+  componentMap,
+  xByPersonId,
+  pinnedByPersonId,
+  parentUnionIdsByPerson,
+  minGap
+) {
   const blocks = [];
   const consumed = new Set();
+
+  const anchoredStartForIds = (ids, width) => {
+    const pinnedTargets = ids
+      .filter((id) => pinnedByPersonId.get(id))
+      .map((id) => xByPersonId.get(id))
+      .filter((value) => Number.isFinite(value));
+
+    if (!pinnedTargets.length) {
+      const center = average(ids.map((id) => xByPersonId.get(id) ?? 0));
+      return center - width / 2;
+    }
+
+    // For partnered/branch blocks, anchor the block center to parent-union targets.
+    const targetCenter = average(pinnedTargets);
+    if (ids.length <= 1) {
+      return targetCenter;
+    }
+    return targetCenter - width / 2;
+  };
 
   personIds.forEach((personId) => {
     if (consumed.has(personId)) return;
@@ -223,16 +209,9 @@ function compactGenerationIntoBlocks(personIds, componentMap, xByPersonId, pinne
       });
       ids.forEach((id) => consumed.add(id));
 
-      const anchoredStarts = [];
-      ids.forEach((id, index) => {
-        if (pinnedByPersonId.get(id)) {
-          anchoredStarts.push((xByPersonId.get(id) ?? 0) - index * minGap);
-        }
-      });
-
       const width = (ids.length - 1) * minGap;
       const center = average(ids.map((id) => xByPersonId.get(id) ?? 0));
-      const start = anchoredStarts.length ? average(anchoredStarts) : center - width / 2;
+      const start = anchoredStartForIds(ids, width);
       blocks.push({ ids, center, width, start });
       return;
     }
@@ -242,19 +221,120 @@ function compactGenerationIntoBlocks(personIds, componentMap, xByPersonId, pinne
     blocks.push({ ids: [personId], center: x, width: 0, start: x });
   });
 
-  blocks.sort((a, b) => a.center - b.center);
+  const personToBlockIndex = new Map();
+  blocks.forEach((block, index) => {
+    block.ids.forEach((personId) => {
+      personToBlockIndex.set(personId, index);
+    });
+  });
 
-  for (let i = 1; i < blocks.length; i += 1) {
-    const prev = blocks[i - 1];
-    const block = blocks[i];
-    const minStart = prev.start + prev.width + minGap;
-    if (block.start < minStart) {
-      block.start = minStart;
+  const parentUnionToBlockIndices = new Map();
+  personIds.forEach((personId) => {
+    const blockIndex = personToBlockIndex.get(personId);
+    if (blockIndex == null) return;
+
+    const parentUnionIds = parentUnionIdsByPerson.get(personId) || [];
+    parentUnionIds.forEach((unionId) => {
+      if (!parentUnionToBlockIndices.has(unionId)) {
+        parentUnionToBlockIndices.set(unionId, new Set());
+      }
+      parentUnionToBlockIndices.get(unionId).add(blockIndex);
+    });
+  });
+
+  const roots = new Map();
+  const find = (index) => {
+    let root = roots.get(index);
+    if (root == null) {
+      roots.set(index, index);
+      return index;
     }
+    while (root !== roots.get(root)) {
+      root = roots.get(root);
+    }
+    let cursor = index;
+    while (roots.get(cursor) !== root) {
+      const parent = roots.get(cursor);
+      roots.set(cursor, root);
+      cursor = parent;
+    }
+    return root;
+  };
+
+  const unite = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) {
+      roots.set(rb, ra);
+    }
+  };
+
+  parentUnionToBlockIndices.forEach((indices) => {
+    const list = [...indices];
+    if (list.length < 2) return;
+    const anchor = list[0];
+    for (let i = 1; i < list.length; i += 1) {
+      unite(anchor, list[i]);
+    }
+  });
+
+  const groupedBlocks = new Map();
+  blocks.forEach((block, index) => {
+    const root = find(index);
+    if (!groupedBlocks.has(root)) {
+      groupedBlocks.set(root, []);
+    }
+    groupedBlocks.get(root).push({ ...block });
+  });
+
+  const mergedBlocks = [];
+  groupedBlocks.forEach((members) => {
+    members.sort((a, b) => a.center - b.center);
+    const ids = members.flatMap((block) => block.ids);
+
+    const width = (ids.length - 1) * minGap;
+    const center = average(ids.map((id) => xByPersonId.get(id) ?? 0));
+    const start = anchoredStartForIds(ids, width);
+    mergedBlocks.push({ ids, center, width, start });
+  });
+
+  mergedBlocks.sort((a, b) => a.center - b.center);
+
+  const targetStarts = mergedBlocks.map((block) => block.start);
+  const relaxNonOverlap = () => {
+    for (let i = 1; i < mergedBlocks.length; i += 1) {
+      const prev = mergedBlocks[i - 1];
+      const block = mergedBlocks[i];
+      const minStart = prev.start + prev.width + minGap;
+      if (block.start < minStart) {
+        block.start = minStart;
+      }
+    }
+
+    for (let i = mergedBlocks.length - 2; i >= 0; i -= 1) {
+      const next = mergedBlocks[i + 1];
+      const block = mergedBlocks[i];
+      const maxStart = next.start - block.width - minGap;
+      if (block.start > maxStart) {
+        block.start = maxStart;
+      }
+    }
+  };
+
+  relaxNonOverlap();
+
+  const targetMean = average(targetStarts);
+  const currentMean = average(mergedBlocks.map((block) => block.start));
+  const meanShift = targetMean - currentMean;
+  if (Number.isFinite(meanShift) && Math.abs(meanShift) > 1e-6) {
+    mergedBlocks.forEach((block) => {
+      block.start += meanShift;
+    });
+    relaxNonOverlap();
   }
 
   const placed = new Map();
-  blocks.forEach((block) => {
+  mergedBlocks.forEach((block) => {
     block.ids.forEach((personId, index) => {
       placed.set(personId, block.start + index * minGap);
     });
@@ -317,9 +397,21 @@ export function layoutFamilyTree(ast, userOptions = {}) {
 
     unions.forEach((union) => {
       const members = union.members || [];
-      const memberGeneration = members.length
+      const children = union.children || [];
+
+      let memberGeneration = members.length
         ? Math.max(...members.map((member) => personGeneration.get(member.personId) ?? 0))
         : 0;
+
+      // Keep parent unions one generation above their known children.
+      if (children.length) {
+        const impliedFromChildren = Math.max(
+          ...children.map((child) => (personGeneration.get(child.personId) ?? 0) - 1)
+        );
+        if (Number.isFinite(impliedFromChildren) && impliedFromChildren > memberGeneration) {
+          memberGeneration = impliedFromChildren;
+        }
+      }
 
       members.forEach((member) => {
         const prev = personGeneration.get(member.personId) ?? 0;
@@ -336,7 +428,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       }
 
       const childGeneration = memberGeneration + 1;
-      (union.children || []).forEach((child) => {
+      children.forEach((child) => {
         const prev = personGeneration.get(child.personId) ?? 0;
         if (childGeneration > prev) {
           personGeneration.set(child.personId, childGeneration);
@@ -367,7 +459,6 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       personIds,
       unions,
       unionGeneration,
-      personGeneration,
       generation
     );
     const componentMap = new Map();
@@ -412,10 +503,12 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       const personIds = generations.get(generation) || [];
       const desiredByPersonId = new Map();
       const pinnedByPersonId = new Map();
+      const parentUnionIdsByPerson = new Map();
 
       personIds.forEach((personId) => {
         const parentUnionIds = parentUnionsByPerson.get(personId) || [];
         const memberUnionIds = memberUnionsByPerson.get(personId) || [];
+        parentUnionIdsByPerson.set(personId, parentUnionIds);
 
         const parentTargets = parentUnionIds
           .map((unionId) => unionX.get(unionId))
@@ -439,6 +532,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         componentMap,
         desiredByPersonId,
         pinnedByPersonId,
+        parentUnionIdsByPerson,
         minGap
       );
 
