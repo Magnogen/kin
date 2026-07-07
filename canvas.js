@@ -7,7 +7,7 @@ export function createCanvasPreview(canvas) {
 
   const viewState = {
     zoom: 1,
-    minZoom: 0.45,
+    minZoom: 0.25,
     maxZoom: 3.2,
     panX: 0,
     panY: 0,
@@ -333,7 +333,7 @@ export function createCanvasPreview(canvas) {
     const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
 
     ctx.strokeStyle = colors.connector;
-    ctx.lineWidth = Math.max(1.2, 1.8 * scale);
+    ctx.lineWidth = 1.8 * scale;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
@@ -379,21 +379,21 @@ export function createCanvasPreview(canvas) {
         roundedRectPath(x, y, width, height, radius);
         ctx.fillStyle = node.kind === "unknown" ? colors.personUnknownFill : colors.personFill;
         ctx.strokeStyle = node.kind === "unknown" ? colors.personUnknownStroke : colors.personStroke;
-        ctx.lineWidth = Math.max(1.1, 1.4 * scale);
+        ctx.lineWidth = 1.4 * scale;
         ctx.fill();
         ctx.stroke();
 
         ctx.fillStyle = colors.label;
-        const nameSize = Math.max(11, 14 * scale);
-        const noteSize = Math.max(10, 11 * scale);
+        const nameSize = 14 * scale;
+        const noteSize = 11 * scale;
         const notes = annotationLines(node.annotations);
-        const lineGap = Math.max(2, 2 * scale);
-        const boxPadY = Math.max(6, 7 * scale);
+        const lineGap = 2 * scale;
+        const boxPadY = 7 * scale;
 
         ctx.font = `${nameSize}px IBM Plex Sans, Segoe UI, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        const label = truncateLabel(node.label || "?", width - 20 * scale);
+        const label = node.label || "?";
         let lineY = y + boxPadY;
         ctx.fillText(label, x + width / 2, lineY);
         lineY += nameSize + lineGap;
@@ -402,8 +402,7 @@ export function createCanvasPreview(canvas) {
           ctx.fillStyle = colors.annotation;
           ctx.font = `${noteSize}px IBM Plex Sans, Segoe UI, sans-serif`;
           notes.forEach((note) => {
-            const text = truncateLabel(note, width - 20 * scale);
-            ctx.fillText(text, x + width / 2, lineY);
+            ctx.fillText(note, x + width / 2, lineY);
             lineY += noteSize + lineGap;
           });
         }
@@ -426,10 +425,10 @@ export function createCanvasPreview(canvas) {
           ctx.fillStyle = colors.annotation;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          const noteSize = Math.max(5, 11 * scale);
-          const lineGap = Math.max(2, 2 * scale);
+          const noteSize = 11 * scale;
+          const lineGap = 2 * scale;
           const lineHeight = noteSize + lineGap;
-          const topPadding = Math.max(2, 8 * scale);
+          const topPadding = 8 * scale;
           const labelY = centerY - radius - topPadding - notes.length * lineHeight;
           ctx.font = `${noteSize}px IBM Plex Sans, Segoe UI, sans-serif`;
           notes.forEach((note, index) => {

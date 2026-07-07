@@ -36,6 +36,7 @@ export function parse(tokens) {
   const singleParentLinksByKey = new Map();
 
   let currentUnion = null;
+  let currentSingleParent = null;
   let lastEntity = null;
 
   const addError = (message, token = peek()) => {
@@ -54,6 +55,45 @@ export function parse(tokens) {
       .join(",");
 
   const buildSingleParentKey = (parent, child) => `${parent.personId}>${child.personId}`;
+
+  const addSingleParentLink = (parent, child, start, end) => {
+    if (!parent || !child) {
+      return null;
+    }
+
+    const key = buildSingleParentKey(parent, child);
+    let declaration = singleParentLinksByKey.get(key);
+
+    if (!declaration) {
+      declaration = {
+        type: "SingleParentDeclaration",
+        id: singleParentLinks.length,
+        parent,
+        child,
+        annotations: [],
+        start,
+        end,
+        key,
+        occurrences: [],
+      };
+
+      singleParentLinksByKey.set(key, declaration);
+      singleParentLinks.push(declaration);
+      statements.push(declaration);
+    } else {
+      statements.push({
+        type: "SingleParentReference",
+        declarationId: declaration.id,
+        parent,
+        child,
+        start,
+        end,
+      });
+    }
+
+    declaration.occurrences.push({ start, end });
+    return declaration;
+  };
 
   const readPerson = (contextMessage) => {
     const token = peek();
@@ -125,22 +165,33 @@ export function parse(tokens) {
       const opToken = peek(-1);
       const child = readPerson("Expected a person after '='.");
 
-      const node = {
-        type: "ChildDeclaration",
-        child,
-        start: opToken.start,
-        end: child?.end ?? opToken.end,
-      };
-
-      if (!currentUnion) {
-        addError("Child declaration must follow a union.", opToken);
+      if (currentSingleParent) {
+        const link = addSingleParentLink(
+          currentSingleParent,
+          child,
+          opToken.start,
+          child?.end ?? opToken.end
+        );
+        lastEntity = link;
       } else {
-        currentUnion.children.push(child);
-        node.unionId = currentUnion.id;
+        const node = {
+          type: "ChildDeclaration",
+          child,
+          start: opToken.start,
+          end: child?.end ?? opToken.end,
+        };
+
+        if (!currentUnion) {
+          addError("Child declaration must follow a union or parent person declaration.", opToken);
+        } else {
+          currentUnion.children.push(child);
+          node.unionId = currentUnion.id;
+        }
+
+        statements.push(node);
+        lastEntity = node;
       }
 
-      statements.push(node);
-      lastEntity = node;
       continue;
     }
 
@@ -174,6 +225,10 @@ export function parse(tokens) {
           attachAnnotationToPerson(annotationTarget.child, text);
         } else if (annotationTarget.type === "PersonDeclaration") {
           attachAnnotationToPerson(annotationTarget.person, text);
+        } else if (annotationTarget.type === "SingleParentDeclaration") {
+          attachAnnotationToPerson(annotationTarget.child, text);
+        } else if (annotationTarget.type === "SingleParentReference") {
+          attachAnnotationToPerson(annotationTarget.child, text);
         }
       }
 
@@ -233,53 +288,27 @@ export function parse(tokens) {
         });
 
         currentUnion = union;
+        currentSingleParent = null;
         lastEntity = union;
       } else if (match("EQUAL")) {
         const opToken = peek(-1);
         const child = readPerson("Expected a person after '='.");
 
-        let declaration = null;
-
-        if (firstPerson && child) {
-          const key = buildSingleParentKey(firstPerson, child);
-          declaration = singleParentLinksByKey.get(key);
-
-          if (!declaration) {
-            declaration = {
-              type: "SingleParentDeclaration",
-              id: singleParentLinks.length,
-              parent: firstPerson,
-              child,
-              annotations: [],
-              start: firstPerson.start,
-              end: child.end,
-              key,
-              occurrences: [],
-            };
-
-            singleParentLinksByKey.set(key, declaration);
-            singleParentLinks.push(declaration);
-            statements.push(declaration);
-          } else {
-            statements.push({
-              type: "SingleParentReference",
-              declarationId: declaration.id,
-              parent: firstPerson,
-              child,
-              start: firstPerson.start,
-              end: child.end,
-            });
-          }
-
-          declaration.occurrences.push({
-            start: firstPerson.start,
-            end: child.end,
-          });
-        } else {
+        if (!firstPerson || !child) {
           addError("Single-parent declaration must contain both parent and child.", opToken);
+          currentSingleParent = firstPerson;
+          lastEntity = null;
+        } else {
+          const declaration = addSingleParentLink(
+            firstPerson,
+            child,
+            firstPerson.start,
+            child.end
+          );
+          currentSingleParent = firstPerson;
+          currentUnion = null;
+          lastEntity = declaration;
         }
-
-        lastEntity = declaration;
       } else {
         const node = {
           type: "PersonDeclaration",
@@ -291,6 +320,7 @@ export function parse(tokens) {
         };
 
         statements.push(node);
+        currentSingleParent = firstPerson;
         lastEntity = node;
       }
 

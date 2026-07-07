@@ -1,8 +1,14 @@
 const DEFAULT_LAYOUT_OPTIONS = {
   personWidth: 142,
   personHeight: 62,
+  personPaddingX: 14,
   personLineHeight: 16,
   personPaddingY: 10,
+  personNameFontSize: 14,
+  personNoteFontSize: 11,
+  personNameFontWeight: "400",
+  personNoteFontWeight: "400",
+  personFontFamily: "IBM Plex Sans, Segoe UI, sans-serif",
   personGap: 34,
   generationGap: 158,
   unionSize: 14,
@@ -24,17 +30,94 @@ function getPersonLabel(person) {
 }
 
 function normalizeAnnotations(annotations) {
-  const seen = new Set();
-  const result = [];
+  return (annotations || [])
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+}
 
-  (annotations || []).forEach((entry) => {
-    const value = String(entry || "").trim();
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    result.push(value);
-  });
+function createTextWidthMeasurer(options) {
+  let ctx = null;
 
-  return result;
+  if (typeof OffscreenCanvas !== "undefined") {
+    const canvas = new OffscreenCanvas(1, 1);
+    ctx = canvas.getContext("2d");
+  } else if (typeof document !== "undefined" && document.createElement) {
+    const canvas = document.createElement("canvas");
+    ctx = canvas.getContext("2d");
+  }
+
+  const cache = new Map();
+  const family = options.personFontFamily;
+
+  const fallbackWidth = (text, fontSize) => {
+    const value = String(text || "");
+    if (!value.length) return fontSize * 0.3;
+
+    // Approximate glyph widths by category for non-browser runtimes.
+    let units = 0;
+    for (const ch of value) {
+      if ("il.:,|'`!".includes(ch)) {
+        units += 0.32;
+      } else if ("mwMW@#%&".includes(ch)) {
+        units += 0.92;
+      } else if (ch === " ") {
+        units += 0.33;
+      } else {
+        units += 0.58;
+      }
+    }
+
+    return units * fontSize;
+  };
+
+  return (text, fontSize, fontWeight) => {
+    const value = String(text || "");
+    const key = `${fontWeight}|${fontSize}|${value}`;
+    if (cache.has(key)) {
+      return cache.get(key);
+    }
+
+    let width;
+    if (ctx) {
+      ctx.font = `${fontWeight} ${fontSize}px ${family}`;
+      width = ctx.measureText(value).width;
+    } else {
+      width = fallbackWidth(value, fontSize);
+    }
+
+    cache.set(key, width);
+    return width;
+  };
+}
+
+function computePersonMetrics(meta, options, measureTextWidth) {
+  const annotations = normalizeAnnotations(meta?.annotations || []);
+  const label = meta?.label || "?";
+  const widestLabel = measureTextWidth(
+    label,
+    options.personNameFontSize,
+    options.personNameFontWeight
+  );
+  const widestAnnotation = annotations.length
+    ? Math.max(
+        ...annotations.map((line) =>
+          measureTextWidth(line, options.personNoteFontSize, options.personNoteFontWeight)
+        )
+      )
+    : 0;
+
+  const widestLine = Math.max(widestLabel, widestAnnotation) + options.personPaddingX * 2;
+  const width = Math.max(options.personWidth, widestLine);
+
+  const lineCount = 1 + annotations.length;
+  const computedHeight = options.personPaddingY * 2 + lineCount * options.personLineHeight;
+  const height = Math.max(options.personHeight, computedHeight);
+
+  return {
+    annotations,
+    width,
+    height,
+  };
 }
 
 function collectPeople(ast) {
@@ -343,11 +426,71 @@ function compactGenerationIntoBlocks(
   return placed;
 }
 
+function enforceCenterGapByWidth(personIds, centerByPersonId, widthByPersonId, gap) {
+  if (!personIds.length) return;
+
+  const ordered = [...personIds]
+    .map((personId) => ({
+      personId,
+      center: centerByPersonId.get(personId) ?? 0,
+      width: widthByPersonId.get(personId) ?? 0,
+    }))
+    .sort((a, b) => {
+      const delta = a.center - b.center;
+      if (delta !== 0) return delta;
+      return a.personId - b.personId;
+    });
+
+  const targetMean = average(ordered.map((item) => item.center));
+
+  for (let i = 1; i < ordered.length; i += 1) {
+    const prev = ordered[i - 1];
+    const current = ordered[i];
+    const minCenter = prev.center + (prev.width + current.width) / 2 + gap;
+    if (current.center < minCenter) {
+      current.center = minCenter;
+    }
+  }
+
+  const shiftedMean = average(ordered.map((item) => item.center));
+  const meanShift = targetMean - shiftedMean;
+  if (Number.isFinite(meanShift) && Math.abs(meanShift) > 1e-6) {
+    ordered.forEach((item) => {
+      item.center += meanShift;
+    });
+
+    for (let i = 1; i < ordered.length; i += 1) {
+      const prev = ordered[i - 1];
+      const current = ordered[i];
+      const minCenter = prev.center + (prev.width + current.width) / 2 + gap;
+      if (current.center < minCenter) {
+        current.center = minCenter;
+      }
+    }
+  }
+
+  ordered.forEach((item) => {
+    centerByPersonId.set(item.personId, item.center);
+  });
+}
+
 export function layoutFamilyTree(ast, userOptions = {}) {
   const options = { ...DEFAULT_LAYOUT_OPTIONS, ...userOptions };
   const people = collectPeople(ast || {});
   const unions = ast?.unions || [];
   const singleParentLinks = ast?.singleParentLinks || [];
+  const measureTextWidth = createTextWidthMeasurer(options);
+
+  const personAnnotationsById = new Map();
+  const personWidthById = new Map();
+  const personHeightById = new Map();
+
+  for (const personId of people.keys()) {
+    const metrics = computePersonMetrics(people.get(personId), options, measureTextWidth);
+    personAnnotationsById.set(personId, metrics.annotations);
+    personWidthById.set(personId, metrics.width);
+    personHeightById.set(personId, metrics.height);
+  }
 
   if (!unions.length && !people.size) {
     return {
@@ -492,7 +635,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
   }
 
   const generationKeys = [...generations.keys()].sort((a, b) => a - b);
-  const minGap = options.personWidth + options.personGap;
+  const nominalCenterGap = options.personWidth + options.personGap;
 
   const componentsByGeneration = new Map();
   generationKeys.forEach((generation) => {
@@ -525,7 +668,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         return aSort - bSort;
       })
       .forEach((personId, index) => {
-        personX.set(personId, index * minGap);
+        personX.set(personId, index * nominalCenterGap);
       });
   });
 
@@ -591,13 +734,15 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         desiredByPersonId,
         pinnedByPersonId,
         parentUnionIdsByPerson,
-        minGap
+        nominalCenterGap
       );
 
       personIds.forEach((personId) => {
         const x = compacted.get(personId) ?? (personX.get(personId) ?? 0);
         personX.set(personId, x);
       });
+
+      enforceCenterGapByWidth(personIds, personX, personWidthById, options.personGap);
     });
   }
 
@@ -605,8 +750,6 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     unionX.set(union.id, getUnionCenterX(union));
   });
 
-  const personAnnotationsById = new Map();
-  const personHeightById = new Map();
   const generationHeight = new Map();
 
   generationKeys.forEach((generation) => {
@@ -614,13 +757,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     let maxHeight = options.personHeight;
 
     personIds.forEach((personId) => {
-      const meta = people.get(personId);
-      const annotations = normalizeAnnotations(meta?.annotations || []);
-      personAnnotationsById.set(personId, annotations);
-
-      const lineCount = 1 + annotations.length;
-      const computedHeight = options.personPaddingY * 2 + lineCount * options.personLineHeight;
-      const height = Math.max(options.personHeight, computedHeight);
+      const height = personHeightById.get(personId) ?? options.personHeight;
       personHeightById.set(personId, height);
       maxHeight = Math.max(maxHeight, height);
     });
@@ -640,7 +777,9 @@ export function layoutFamilyTree(ast, userOptions = {}) {
 
   for (const personId of people.keys()) {
     const generation = personGeneration.get(personId) ?? 0;
-    const x = options.paddingX + (personX.get(personId) ?? 0);
+    const width = personWidthById.get(personId) ?? options.personWidth;
+    const centerX = personX.get(personId) ?? 0;
+    const x = options.paddingX + centerX - width / 2;
     const y = generationTop.get(generation) ?? options.paddingY;
     const meta = people.get(personId);
     const annotations = personAnnotationsById.get(personId) || [];
@@ -653,7 +792,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       generation,
       x,
       y,
-      width: options.personWidth,
+      width,
       height,
       label: meta?.label || "?",
       annotations,
@@ -663,7 +802,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
 
   unions.forEach((union) => {
     const generation = unionGeneration.get(union.id) ?? 0;
-    const centerX = options.paddingX + (unionX.get(union.id) ?? 0) + options.personWidth / 2;
+    const centerX = options.paddingX + (unionX.get(union.id) ?? 0);
     const centerY =
       (generationTop.get(generation) ?? options.paddingY) +
       (generationHeight.get(generation) ?? options.personHeight) +
