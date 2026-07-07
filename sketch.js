@@ -68,7 +68,7 @@ function syncEditorViews() {
     // updateAstDebug(ast);
     canvasPreview.render(ast);
   } catch (error) {
-    // tokenDebug.textContent = `Parser error: ${error.message}`;
+    tokenDebug.textContent = `Parser error: ${error.message}`;
     canvasPreview.render(null);
   }
 }

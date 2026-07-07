@@ -150,7 +150,15 @@ Example:
 = Charlie
 ```
 
-A child declaration MUST follow a union.
+A child MAY also be declared inline from a single parent.
+
+Example:
+
+```
+Alex = Charlie
+```
+
+In this form, `Alex` is treated as the sole known parent of `Charlie`.
 
 The child is a person.
 
@@ -221,7 +229,7 @@ These behaviors do not affect validity.
 ## 11. Error Handling
 
 A parser MUST reject or report:
-- a child declaration without a preceding union
+- a standalone child declaration without a preceding union
 - an annotation without a valid preceding entity
 - a union with fewer than two persons
 

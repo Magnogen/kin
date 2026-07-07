@@ -347,6 +347,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
   const options = { ...DEFAULT_LAYOUT_OPTIONS, ...userOptions };
   const people = collectPeople(ast || {});
   const unions = ast?.unions || [];
+  const singleParentLinks = ast?.singleParentLinks || [];
 
   if (!unions.length && !people.size) {
     return {
@@ -359,10 +360,14 @@ export function layoutFamilyTree(ast, userOptions = {}) {
 
   const memberUnionsByPerson = new Map();
   const parentUnionsByPerson = new Map();
+  const parentPeopleByPerson = new Map();
+  const childPeopleByPerson = new Map();
 
   for (const personId of people.keys()) {
     memberUnionsByPerson.set(personId, []);
     parentUnionsByPerson.set(personId, []);
+    parentPeopleByPerson.set(personId, []);
+    childPeopleByPerson.set(personId, []);
   }
 
   unions.forEach((union) => {
@@ -379,6 +384,22 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       }
       parentUnionsByPerson.get(child.personId).push(union.id);
     });
+  });
+
+  singleParentLinks.forEach((link) => {
+    const parentId = link.parent?.personId;
+    const childId = link.child?.personId;
+    if (parentId == null || childId == null) return;
+
+    if (!parentPeopleByPerson.has(childId)) {
+      parentPeopleByPerson.set(childId, []);
+    }
+    parentPeopleByPerson.get(childId).push(parentId);
+
+    if (!childPeopleByPerson.has(parentId)) {
+      childPeopleByPerson.set(parentId, []);
+    }
+    childPeopleByPerson.get(parentId).push(childId);
   });
 
   const personGeneration = new Map();
@@ -435,6 +456,27 @@ export function layoutFamilyTree(ast, userOptions = {}) {
           changed = true;
         }
       });
+    });
+
+    singleParentLinks.forEach((link) => {
+      const parentId = link.parent?.personId;
+      const childId = link.child?.personId;
+      if (parentId == null || childId == null) return;
+
+      const parentGeneration = personGeneration.get(parentId) ?? 0;
+      const childGeneration = personGeneration.get(childId) ?? 0;
+
+      const impliedFromChild = childGeneration - 1;
+      if (impliedFromChild > parentGeneration) {
+        personGeneration.set(parentId, impliedFromChild);
+        changed = true;
+      }
+
+      const impliedFromParent = parentGeneration + 1;
+      if (impliedFromParent > childGeneration) {
+        personGeneration.set(childId, impliedFromParent);
+        changed = true;
+      }
     });
 
     if (!changed) break;
@@ -508,13 +550,29 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       personIds.forEach((personId) => {
         const parentUnionIds = parentUnionsByPerson.get(personId) || [];
         const memberUnionIds = memberUnionsByPerson.get(personId) || [];
-        parentUnionIdsByPerson.set(personId, parentUnionIds);
+        const parentPersonIds = parentPeopleByPerson.get(personId) || [];
+        const childPersonIds = childPeopleByPerson.get(personId) || [];
+
+        parentUnionIdsByPerson.set(personId, [
+          ...parentUnionIds,
+          ...parentPersonIds.map((parentId) => `parent:${parentId}`),
+        ]);
 
         const parentTargets = parentUnionIds
           .map((unionId) => unionX.get(unionId))
+          .concat(
+            parentPersonIds
+              .map((parentId) => personX.get(parentId))
+              .filter((value) => Number.isFinite(value))
+          )
           .filter((value) => Number.isFinite(value));
         const memberTargets = memberUnionIds
           .map((unionId) => unionX.get(unionId))
+          .concat(
+            childPersonIds
+              .map((childId) => personX.get(childId))
+              .filter((value) => Number.isFinite(value))
+          )
           .filter((value) => Number.isFinite(value));
 
         const current = personX.get(personId) ?? 0;
@@ -643,6 +701,19 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         from: `union:${union.id}`,
         to: `person:${child.personId}`,
       });
+    });
+  });
+
+  singleParentLinks.forEach((link) => {
+    const parentId = link.parent?.personId;
+    const childId = link.child?.personId;
+    if (parentId == null || childId == null) return;
+
+    edges.push({
+      id: `edge:single-parent:${parentId}:${childId}`,
+      type: "singleParent",
+      from: `person:${parentId}`,
+      to: `person:${childId}`,
     });
   });
 

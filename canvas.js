@@ -1,4 +1,4 @@
-import { layoutFamilyTree } from "./kin/layout.js";
+import { layoutFamilyTree } from "./layout.js";
 
 export function createCanvasPreview(canvas) {
   const ctx = canvas?.getContext("2d");
@@ -12,9 +12,13 @@ export function createCanvasPreview(canvas) {
     panX: 0,
     panY: 0,
     isPanning: false,
+    isPinching: false,
     pointerId: null,
     lastX: 0,
     lastY: 0,
+    pinchStartDistance: 0,
+    pinchStartZoom: 1,
+    activePointers: new Map(),
   };
 
   if (!canvas || !ctx) {
@@ -90,10 +94,7 @@ export function createCanvasPreview(canvas) {
     const height = canvas.clientHeight;
     const { minX, minY, offsetX, offsetY, scale } = transform;
 
-    let worldStep = 28;
-    while (worldStep * scale < 16) {
-      worldStep *= 2;
-    }
+    const worldStep = 28;
 
     const worldMinX = minX + (0 - offsetX) / scale;
     const worldMaxX = minX + (width - offsetX) / scale;
@@ -149,6 +150,61 @@ export function createCanvasPreview(canvas) {
     return Math.max(min, Math.min(max, value));
   }
 
+  function pointerDistance(a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    return Math.hypot(dx, dy);
+  }
+
+  function pointerMidpoint(a, b) {
+    return {
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+    };
+  }
+
+  function applyZoomAtPoint(point, nextZoom) {
+    if (!currentViewport) return false;
+
+    const oldZoom = viewState.zoom;
+    if (nextZoom === oldZoom) return false;
+
+    const oldScale = currentViewport.baseScale * oldZoom;
+    const nextScale = currentViewport.baseScale * nextZoom;
+
+    const worldX =
+      currentViewport.minX +
+      (point.x - currentViewport.baseOffsetX - viewState.panX) / oldScale;
+    const worldY =
+      currentViewport.minY +
+      (point.y - currentViewport.baseOffsetY - viewState.panY) / oldScale;
+
+    viewState.zoom = nextZoom;
+    viewState.panX =
+      point.x -
+      currentViewport.baseOffsetX -
+      (worldX - currentViewport.minX) * nextScale;
+    viewState.panY =
+      point.y -
+      currentViewport.baseOffsetY -
+      (worldY - currentViewport.minY) * nextScale;
+
+    return true;
+  }
+
+  function beginPinch() {
+    const pointers = [...viewState.activePointers.values()];
+    if (pointers.length < 2) return;
+
+    const distance = Math.max(1, pointerDistance(pointers[0], pointers[1]));
+    viewState.isPinching = true;
+    viewState.isPanning = false;
+    viewState.pointerId = null;
+    viewState.pinchStartDistance = distance;
+    viewState.pinchStartZoom = viewState.zoom;
+    updateCursor();
+  }
+
   function resetView() {
     viewState.zoom = 1;
     viewState.panX = 0;
@@ -187,12 +243,6 @@ export function createCanvasPreview(canvas) {
 
   function drawTree(ast, colors) {
     const layout = layoutFamilyTree(ast);
-    if (!layout.nodes.length) {
-      currentViewport = null;
-      updateCursor();
-      drawNoData(colors, "No people to layout yet");
-      return;
-    }
 
     const viewportWidth = canvas.clientWidth;
     const viewportHeight = canvas.clientHeight;
@@ -233,6 +283,13 @@ export function createCanvasPreview(canvas) {
       offsetY,
       scale,
     });
+    
+    if (!layout.nodes.length) {
+      currentViewport = null;
+      updateCursor();
+      drawNoData(colors, "No people to layout yet");
+      return;
+    }
 
     const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
 
@@ -254,6 +311,9 @@ export function createCanvasPreview(canvas) {
       if (edge.type === "member") {
         fromY = mapY(from.y + from.height);
         toY = mapY(to.y + to.height / 2);
+      } else if (edge.type === "singleParent") {
+        fromY = mapY(from.y + from.height);
+        toY = mapY(to.y);
       } else {
         fromY = mapY(from.y + from.height / 2);
         toY = mapY(to.y);
@@ -364,18 +424,10 @@ export function createCanvasPreview(canvas) {
       currentViewport = null;
       updateCursor();
       drawStaticGrid(colors);
-      drawNoData(colors, "Parse errors found (see AST panel)");
+      drawNoData(colors, "Parse errors found");
       ctx.fillStyle = colors.error;
       ctx.font = "500 13px IBM Plex Sans, Segoe UI, sans-serif";
       ctx.fillText(ast.errors[0].message, 20, 52);
-      return;
-    }
-
-    if (!ast.unions?.length) {
-      currentViewport = null;
-      updateCursor();
-      drawStaticGrid(colors);
-      drawNoData(colors, "No unions to preview yet");
       return;
     }
 
@@ -399,10 +451,16 @@ export function createCanvasPreview(canvas) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
 
     const point = canvasPointFromEvent(event);
-    viewState.isPanning = true;
-    viewState.pointerId = event.pointerId;
-    viewState.lastX = point.x;
-    viewState.lastY = point.y;
+    viewState.activePointers.set(event.pointerId, point);
+
+    if (viewState.activePointers.size >= 2) {
+      beginPinch();
+    } else {
+      viewState.isPanning = true;
+      viewState.pointerId = event.pointerId;
+      viewState.lastX = point.x;
+      viewState.lastY = point.y;
+    }
 
     canvas.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -410,11 +468,37 @@ export function createCanvasPreview(canvas) {
   }
 
   function handlePointerMove(event) {
-    if (!viewState.isPanning || event.pointerId !== viewState.pointerId) {
+    if (!viewState.activePointers.has(event.pointerId)) {
       return;
     }
 
     const point = canvasPointFromEvent(event);
+    viewState.activePointers.set(event.pointerId, point);
+
+    if (viewState.isPinching && viewState.activePointers.size >= 2) {
+      const pointers = [...viewState.activePointers.values()];
+      const distance = Math.max(1, pointerDistance(pointers[0], pointers[1]));
+      const midpoint = pointerMidpoint(pointers[0], pointers[1]);
+
+      const zoomFactor = distance / Math.max(1, viewState.pinchStartDistance);
+      const nextZoom = clamp(
+        viewState.pinchStartZoom * zoomFactor,
+        viewState.minZoom,
+        viewState.maxZoom
+      );
+
+      if (applyZoomAtPoint(midpoint, nextZoom)) {
+        redraw();
+      }
+
+      event.preventDefault();
+      return;
+    }
+
+    if (!viewState.isPanning || event.pointerId !== viewState.pointerId) {
+      return;
+    }
+
     const dx = point.x - viewState.lastX;
     const dy = point.y - viewState.lastY;
 
@@ -427,16 +511,43 @@ export function createCanvasPreview(canvas) {
   }
 
   function stopPanning(event) {
-    if (!viewState.isPanning) return;
-    if (event && event.pointerId !== viewState.pointerId) return;
+    if (!event) return;
 
-    if (event && canvas.hasPointerCapture(event.pointerId)) {
+    viewState.activePointers.delete(event.pointerId);
+
+    if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
 
-    viewState.isPanning = false;
-    viewState.pointerId = null;
-    updateCursor();
+    if (viewState.isPinching) {
+      if (viewState.activePointers.size >= 2) {
+        beginPinch();
+        return;
+      }
+
+      viewState.isPinching = false;
+
+      const remaining = [...viewState.activePointers.entries()];
+      if (remaining.length === 1) {
+        const [pointerId, point] = remaining[0];
+        viewState.isPanning = true;
+        viewState.pointerId = pointerId;
+        viewState.lastX = point.x;
+        viewState.lastY = point.y;
+      } else {
+        viewState.isPanning = false;
+        viewState.pointerId = null;
+      }
+
+      updateCursor();
+      return;
+    }
+
+    if (event.pointerId === viewState.pointerId) {
+      viewState.isPanning = false;
+      viewState.pointerId = null;
+      updateCursor();
+    }
   }
 
   function handleWheel(event) {
@@ -444,22 +555,11 @@ export function createCanvasPreview(canvas) {
     event.preventDefault();
 
     const point = canvasPointFromEvent(event);
-    const oldZoom = viewState.zoom;
     const zoomFactor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const nextZoom = clamp(oldZoom * zoomFactor, viewState.minZoom, viewState.maxZoom);
-    if (nextZoom === oldZoom) return;
-
-    const oldScale = currentViewport.baseScale * oldZoom;
-    const nextScale = currentViewport.baseScale * nextZoom;
-
-    const worldX = currentViewport.minX + (point.x - currentViewport.baseOffsetX - viewState.panX) / oldScale;
-    const worldY = currentViewport.minY + (point.y - currentViewport.baseOffsetY - viewState.panY) / oldScale;
-
-    viewState.zoom = nextZoom;
-    viewState.panX = point.x - currentViewport.baseOffsetX - (worldX - currentViewport.minX) * nextScale;
-    viewState.panY = point.y - currentViewport.baseOffsetY - (worldY - currentViewport.minY) * nextScale;
-
-    redraw();
+    const nextZoom = clamp(viewState.zoom * zoomFactor, viewState.minZoom, viewState.maxZoom);
+    if (applyZoomAtPoint(point, nextZoom)) {
+      redraw();
+    }
   }
 
   function handleDoubleClick(event) {

@@ -32,6 +32,8 @@ export function parse(tokens) {
   const peopleByKey = new Map();
   const unions = [];
   const unionsByKey = new Map();
+  const singleParentLinks = [];
+  const singleParentLinksByKey = new Map();
 
   let currentUnion = null;
   let lastEntity = null;
@@ -50,6 +52,8 @@ export function parse(tokens) {
       .map((member) => member.personId)
       .sort((a, b) => a - b)
       .join(",");
+
+  const buildSingleParentKey = (parent, child) => `${parent.personId}>${child.personId}`;
 
   const readPerson = (contextMessage) => {
     const token = peek();
@@ -230,6 +234,52 @@ export function parse(tokens) {
 
         currentUnion = union;
         lastEntity = union;
+      } else if (match("EQUAL")) {
+        const opToken = peek(-1);
+        const child = readPerson("Expected a person after '='.");
+
+        let declaration = null;
+
+        if (firstPerson && child) {
+          const key = buildSingleParentKey(firstPerson, child);
+          declaration = singleParentLinksByKey.get(key);
+
+          if (!declaration) {
+            declaration = {
+              type: "SingleParentDeclaration",
+              id: singleParentLinks.length,
+              parent: firstPerson,
+              child,
+              annotations: [],
+              start: firstPerson.start,
+              end: child.end,
+              key,
+              occurrences: [],
+            };
+
+            singleParentLinksByKey.set(key, declaration);
+            singleParentLinks.push(declaration);
+            statements.push(declaration);
+          } else {
+            statements.push({
+              type: "SingleParentReference",
+              declarationId: declaration.id,
+              parent: firstPerson,
+              child,
+              start: firstPerson.start,
+              end: child.end,
+            });
+          }
+
+          declaration.occurrences.push({
+            start: firstPerson.start,
+            end: child.end,
+          });
+        } else {
+          addError("Single-parent declaration must contain both parent and child.", opToken);
+        }
+
+        lastEntity = declaration;
       } else {
         const node = {
           type: "PersonDeclaration",
@@ -254,6 +304,7 @@ export function parse(tokens) {
   return {
     type: "Document",
     unions,
+    singleParentLinks,
     people,
     errors,
   };
