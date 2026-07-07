@@ -18,6 +18,7 @@ export function createCanvasPreview(canvas) {
     lastY: 0,
     pinchStartDistance: 0,
     pinchStartZoom: 1,
+    pinchLastMidpoint: null,
     activePointers: new Map(),
   };
 
@@ -197,12 +198,50 @@ export function createCanvasPreview(canvas) {
     if (pointers.length < 2) return;
 
     const distance = Math.max(1, pointerDistance(pointers[0], pointers[1]));
+    const midpoint = pointerMidpoint(pointers[0], pointers[1]);
     viewState.isPinching = true;
     viewState.isPanning = false;
     viewState.pointerId = null;
     viewState.pinchStartDistance = distance;
     viewState.pinchStartZoom = viewState.zoom;
+    viewState.pinchLastMidpoint = midpoint;
     updateCursor();
+  }
+
+  function applyPinchTransform(previousMidpoint, currentMidpoint, nextZoom) {
+    if (!currentViewport) return false;
+
+    const oldZoom = viewState.zoom;
+    const oldScale = currentViewport.baseScale * oldZoom;
+    const clampedZoom = clamp(nextZoom, viewState.minZoom, viewState.maxZoom);
+    const nextScale = currentViewport.baseScale * clampedZoom;
+
+    const worldX =
+      currentViewport.minX +
+      (previousMidpoint.x - currentViewport.baseOffsetX - viewState.panX) / oldScale;
+    const worldY =
+      currentViewport.minY +
+      (previousMidpoint.y - currentViewport.baseOffsetY - viewState.panY) / oldScale;
+
+    const nextPanX =
+      currentMidpoint.x -
+      currentViewport.baseOffsetX -
+      (worldX - currentViewport.minX) * nextScale;
+    const nextPanY =
+      currentMidpoint.y -
+      currentViewport.baseOffsetY -
+      (worldY - currentViewport.minY) * nextScale;
+
+    const changed =
+      clampedZoom !== viewState.zoom ||
+      Math.abs(nextPanX - viewState.panX) > 1e-6 ||
+      Math.abs(nextPanY - viewState.panY) > 1e-6;
+
+    viewState.zoom = clampedZoom;
+    viewState.panX = nextPanX;
+    viewState.panY = nextPanY;
+
+    return changed;
   }
 
   function resetView() {
@@ -479,17 +518,16 @@ export function createCanvasPreview(canvas) {
       const pointers = [...viewState.activePointers.values()];
       const distance = Math.max(1, pointerDistance(pointers[0], pointers[1]));
       const midpoint = pointerMidpoint(pointers[0], pointers[1]);
+      const previousMidpoint = viewState.pinchLastMidpoint || midpoint;
 
       const zoomFactor = distance / Math.max(1, viewState.pinchStartDistance);
-      const nextZoom = clamp(
-        viewState.pinchStartZoom * zoomFactor,
-        viewState.minZoom,
-        viewState.maxZoom
-      );
+      const nextZoom = viewState.pinchStartZoom * zoomFactor;
 
-      if (applyZoomAtPoint(midpoint, nextZoom)) {
+      if (applyPinchTransform(previousMidpoint, midpoint, nextZoom)) {
         redraw();
       }
+
+      viewState.pinchLastMidpoint = midpoint;
 
       event.preventDefault();
       return;
@@ -526,6 +564,7 @@ export function createCanvasPreview(canvas) {
       }
 
       viewState.isPinching = false;
+      viewState.pinchLastMidpoint = null;
 
       const remaining = [...viewState.activePointers.entries()];
       if (remaining.length === 1) {
