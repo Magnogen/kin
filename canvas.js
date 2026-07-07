@@ -8,7 +8,7 @@ export function createCanvasPreview(canvas) {
   const viewState = {
     zoom: 1,
     minZoom: 0.25,
-    maxZoom: 3.2,
+    maxZoom: 5.00,
     panX: 0,
     panY: 0,
     isPanning: false,
@@ -333,7 +333,7 @@ export function createCanvasPreview(canvas) {
     const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
 
     ctx.strokeStyle = colors.connector;
-    ctx.lineWidth = 1.8 * scale;
+    ctx.lineWidth = Math.max(1.2, 1.8 * scale);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
@@ -345,10 +345,14 @@ export function createCanvasPreview(canvas) {
       const fromCenterX = mapX(from.x + from.width / 2);
       const toCenterX = mapX(to.x + to.width / 2);
 
+      let fromX = fromCenterX;
+      let toX = toCenterX;
+
       let fromY;
       let toY;
       if (edge.type === "member") {
-        fromY = mapY(from.y + from.height);
+        fromX = fromCenterX < toCenterX ? mapX(from.x + from.width) : mapX(from.x);
+        fromY = mapY(from.y + from.height / 2);
         toY = mapY(to.y + to.height / 2);
       } else if (edge.type === "singleParent") {
         fromY = mapY(from.y + from.height);
@@ -358,11 +362,15 @@ export function createCanvasPreview(canvas) {
         toY = mapY(to.y);
       }
 
-      const controlY = (fromY + toY) / 2;
-
       ctx.beginPath();
-      ctx.moveTo(fromCenterX, fromY);
-      ctx.bezierCurveTo(fromCenterX, controlY, toCenterX, controlY, toCenterX, toY);
+      ctx.moveTo(fromX, fromY);
+      if (edge.type === "member") {
+        const controlX = (fromX + toX) / 2;
+        ctx.bezierCurveTo(controlX, fromY, controlX, toY, toX, toY);
+      } else {
+        const controlY = (fromY + toY) / 2;
+        ctx.bezierCurveTo(fromX, controlY, toX, controlY, toX, toY);
+      }
       ctx.stroke();
     });
 
@@ -379,21 +387,21 @@ export function createCanvasPreview(canvas) {
         roundedRectPath(x, y, width, height, radius);
         ctx.fillStyle = node.kind === "unknown" ? colors.personUnknownFill : colors.personFill;
         ctx.strokeStyle = node.kind === "unknown" ? colors.personUnknownStroke : colors.personStroke;
-        ctx.lineWidth = 1.4 * scale;
+        ctx.lineWidth = Math.max(1.1, 1.4 * scale);
         ctx.fill();
         ctx.stroke();
 
         ctx.fillStyle = colors.label;
-        const nameSize = 14 * scale;
-        const noteSize = 11 * scale;
+        const nameSize = Math.max(11, 14 * scale);
+        const noteSize = Math.max(10, 11 * scale);
         const notes = annotationLines(node.annotations);
-        const lineGap = 2 * scale;
-        const boxPadY = 7 * scale;
+        const lineGap = Math.max(2, 2 * scale);
+        const boxPadY = Math.max(6, 7 * scale);
 
         ctx.font = `${nameSize}px IBM Plex Sans, Segoe UI, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        const label = node.label || "?";
+        const label = truncateLabel(node.label || "?", width - 20 * scale);
         let lineY = y + boxPadY;
         ctx.fillText(label, x + width / 2, lineY);
         lineY += nameSize + lineGap;
@@ -402,7 +410,8 @@ export function createCanvasPreview(canvas) {
           ctx.fillStyle = colors.annotation;
           ctx.font = `${noteSize}px IBM Plex Sans, Segoe UI, sans-serif`;
           notes.forEach((note) => {
-            ctx.fillText(note, x + width / 2, lineY);
+            const text = truncateLabel(note, width - 20 * scale);
+            ctx.fillText(text, x + width / 2, lineY);
             lineY += noteSize + lineGap;
           });
         }
@@ -425,10 +434,10 @@ export function createCanvasPreview(canvas) {
           ctx.fillStyle = colors.annotation;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          const noteSize = 11 * scale;
-          const lineGap = 2 * scale;
+          const noteSize = Math.max(5, 11 * scale);
+          const lineGap = Math.max(2, 2 * scale);
           const lineHeight = noteSize + lineGap;
-          const topPadding = 8 * scale;
+          const topPadding = Math.max(2, 18 * scale);
           const labelY = centerY - radius - topPadding - notes.length * lineHeight;
           ctx.font = `${noteSize}px IBM Plex Sans, Segoe UI, sans-serif`;
           notes.forEach((note, index) => {

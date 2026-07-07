@@ -12,7 +12,7 @@ const DEFAULT_LAYOUT_OPTIONS = {
   personGap: 34,
   generationGap: 158,
   unionSize: 14,
-  unionOffsetY: 24,
+  unionOffsetY: 0,
   paddingX: 24,
   paddingY: 24,
   iterations: 8,
@@ -675,8 +675,34 @@ export function layoutFamilyTree(ast, userOptions = {}) {
   const unionX = new Map();
   const getUnionCenterX = (union) => {
     const members = union.members || [];
-    const xs = members.map((member) => personX.get(member.personId) ?? 0);
-    return xs.length ? average(xs) : 0;
+    const centers = members.map((member) => personX.get(member.personId) ?? 0);
+    if (!centers.length) return 0;
+
+    if (members.length === 2) {
+      const [first, second] = members;
+      const firstCenter = personX.get(first.personId) ?? 0;
+      const secondCenter = personX.get(second.personId) ?? 0;
+      const firstWidth = personWidthById.get(first.personId) ?? options.personWidth;
+      const secondWidth = personWidthById.get(second.personId) ?? options.personWidth;
+
+      let leftCenter = firstCenter;
+      let rightCenter = secondCenter;
+      let leftWidth = firstWidth;
+      let rightWidth = secondWidth;
+
+      if (firstCenter > secondCenter) {
+        leftCenter = secondCenter;
+        rightCenter = firstCenter;
+        leftWidth = secondWidth;
+        rightWidth = firstWidth;
+      }
+
+      const innerLeftEdge = leftCenter + leftWidth / 2;
+      const innerRightEdge = rightCenter - rightWidth / 2;
+      return (innerLeftEdge + innerRightEdge) / 2;
+    }
+
+    return average(centers);
   };
 
   for (let i = 0; i < options.iterations; i += 1) {
@@ -805,7 +831,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     const centerX = options.paddingX + (unionX.get(union.id) ?? 0);
     const centerY =
       (generationTop.get(generation) ?? options.paddingY) +
-      (generationHeight.get(generation) ?? options.personHeight) +
+      (generationHeight.get(generation) ?? options.personHeight) / 2 +
       options.unionOffsetY;
 
     const x = centerX - options.unionSize / 2;
