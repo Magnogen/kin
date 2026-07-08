@@ -1,17 +1,17 @@
 const DEFAULT_LAYOUT_OPTIONS = {
-  personWidth: 142,
-  personHeight: 62,
-  personPaddingX: 14,
+  personWidth: 16,
+  personHeight: 16,
+  personPaddingX: 16,
   personLineHeight: 16,
-  personPaddingY: 10,
+  personPaddingY: 16,
   personNameFontSize: 14,
   personNoteFontSize: 11,
   personNameFontWeight: "400",
   personNoteFontWeight: "400",
   personFontFamily: "IBM Plex Sans, Segoe UI, sans-serif",
   personGap: 34,
-  generationGap: 158,
-  unionSize: 14,
+  generationGap: 64,
+  unionSize: 8,
   unionOffsetY: 0,
   paddingX: 24,
   paddingY: 24,
@@ -250,9 +250,108 @@ function buildUnionComponentsForGeneration(
   return components;
 }
 
+function orderUnionComponentForGeneration(
+  component,
+  unions,
+  unionGeneration,
+  generation,
+  people
+) {
+  const componentSet = new Set(component);
+  const adjacency = new Map(component.map((personId) => [personId, new Set()]));
+  const componentUnions = [];
+
+  unions.forEach((union) => {
+    if ((unionGeneration.get(union.id) ?? 0) !== generation) {
+      return;
+    }
+
+    const members = (union.members || [])
+      .map((member) => member.personId)
+      .filter((personId) => componentSet.has(personId));
+
+    if (members.length < 2) {
+      return;
+    }
+
+    componentUnions.push(members);
+
+    const anchor = members[0];
+    for (let i = 1; i < members.length; i += 1) {
+      const memberId = members[i];
+      adjacency.get(anchor)?.add(memberId);
+      adjacency.get(memberId)?.add(anchor);
+    }
+  });
+
+  const orderedBySortIndex = [...component].sort((a, b) => {
+    const aSort = people.get(a)?.sortIndex ?? a;
+    const bSort = people.get(b)?.sortIndex ?? b;
+    return aSort - bSort;
+  });
+
+  let anchorId = null;
+  let anchorDegree = 1;
+  orderedBySortIndex.forEach((personId) => {
+    const degree = adjacency.get(personId)?.size ?? 0;
+    if (degree > anchorDegree) {
+      anchorId = personId;
+      anchorDegree = degree;
+    }
+  });
+
+  if (anchorId == null) {
+    return orderedBySortIndex;
+  }
+
+  const seen = new Set([anchorId]);
+  const left = [];
+  const right = [];
+  let placeOnLeft = false;
+
+  componentUnions.forEach((members) => {
+    if (!members.includes(anchorId)) {
+      return;
+    }
+
+    members.forEach((personId) => {
+      if (personId === anchorId || seen.has(personId)) {
+        return;
+      }
+
+      if (placeOnLeft) {
+        left.unshift(personId);
+      } else {
+        right.push(personId);
+      }
+
+      seen.add(personId);
+      placeOnLeft = !placeOnLeft;
+    });
+  });
+
+  orderedBySortIndex.forEach((personId) => {
+    if (seen.has(personId)) {
+      return;
+    }
+
+    if (placeOnLeft) {
+      left.unshift(personId);
+    } else {
+      right.push(personId);
+    }
+
+    seen.add(personId);
+    placeOnLeft = !placeOnLeft;
+  });
+
+  return [...left, anchorId, ...right];
+}
+
 function compactGenerationIntoBlocks(
   personIds,
   componentMap,
+  orderedComponentIdsByPerson,
   xByPersonId,
   pinnedByPersonId,
   parentUnionIdsByPerson,
@@ -285,11 +384,7 @@ function compactGenerationIntoBlocks(
 
     const component = componentMap.get(personId);
     if (component?.length > 1) {
-      const ids = [...component].sort((a, b) => {
-        const delta = (xByPersonId.get(a) ?? 0) - (xByPersonId.get(b) ?? 0);
-        if (delta !== 0) return delta;
-        return a - b;
-      });
+      const ids = [...(orderedComponentIdsByPerson.get(personId) || component)];
       ids.forEach((id) => consumed.add(id));
 
       const width = (ids.length - 1) * minGap;
@@ -622,6 +717,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
   const nominalCenterGap = options.personWidth + options.personGap;
 
   const componentsByGeneration = new Map();
+  const orderedComponentIdsByGeneration = new Map();
   generationKeys.forEach((generation) => {
     const personIds = generations.get(generation) || [];
     const components = buildUnionComponentsForGeneration(
@@ -631,14 +727,25 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       generation
     );
     const componentMap = new Map();
+    const orderedComponentIdsByPerson = new Map();
 
     components.forEach((component) => {
+      const orderedComponent = orderUnionComponentForGeneration(
+        component,
+        unions,
+        unionGeneration,
+        generation,
+        people
+      );
+
       component.forEach((personId) => {
         componentMap.set(personId, component);
+        orderedComponentIdsByPerson.set(personId, orderedComponent);
       });
     });
 
     componentsByGeneration.set(generation, componentMap);
+    orderedComponentIdsByGeneration.set(generation, orderedComponentIdsByPerson);
   });
 
   const personX = new Map();
@@ -738,9 +845,12 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       });
 
       const componentMap = componentsByGeneration.get(generation) || new Map();
+      const orderedComponentIdsByPerson =
+        orderedComponentIdsByGeneration.get(generation) || new Map();
       const compacted = compactGenerationIntoBlocks(
         personIds,
         componentMap,
+        orderedComponentIdsByPerson,
         desiredByPersonId,
         pinnedByPersonId,
         parentUnionIdsByPerson,

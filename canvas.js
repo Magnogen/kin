@@ -422,13 +422,15 @@ export function createCanvasPreview(canvas) {
         const noteSize = 11 * scale;
         const notes = annotationLines(node.annotations);
         const lineGap = 2 * scale;
-        const boxPadY = 7 * scale;
+        const lineCount = 1 + notes.length;
+        const textBlockHeight =
+          nameSize + notes.length * noteSize + Math.max(0, lineCount - 1) * lineGap;
 
         ctx.font = `${nameSize}px IBM Plex Sans, Segoe UI, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
         const label = truncateLabel(node.label || "?", width - 20 * scale);
-        let lineY = y + boxPadY;
+        let lineY = y + (height - textBlockHeight) / 2;
         ctx.fillText(label, x + width / 2, lineY);
         lineY += nameSize + lineGap;
 
