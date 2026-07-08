@@ -9,6 +9,10 @@
 	--header-bg-end: #f8fbff;
 	--editor-shell-bg: #fbfdff;
 	--highlight-ink: #6b7788;
+	--highlight-text: #2d3848;
+	--highlight-operator: #0d6efd;
+	--highlight-comment: #7a8799;
+	--highlight-unknown: #b34a63;
 	--caret: #111827;
 	--canvas-bg: #fafcff;
 	--radius: 14px;
@@ -25,6 +29,10 @@
 	--header-bg-end: #101a28;
 	--editor-shell-bg: #0f1825;
 	--highlight-ink: #9ca9bc;
+	--highlight-text: #dce7f8;
+	--highlight-operator: #89bbff;
+	--highlight-comment: #7c8ca3;
+	--highlight-unknown: #ff9cb1;
 	--caret: #f3f7ff;
 	--canvas-bg: #0f1824;
 }
@@ -142,6 +150,23 @@ body {
 #highlight-layer {
 	pointer-events: none;
 	color: var(--highlight-ink);
+}
+
+.token-text {
+	color: var(--highlight-text);
+}
+
+.token-operator {
+	color: var(--highlight-operator);
+}
+
+.token-comment {
+	color: var(--highlight-comment);
+	font-style: italic;
+}
+
+.token-unknown {
+	color: var(--highlight-unknown);
 }
 
 #editor {

@@ -48,6 +48,147 @@ export function parse(tokens) {
     });
   };
 
+  const addSemanticError = (message, start, end, tokenType = "SEMANTIC") => {
+    errors.push({
+      message,
+      start: Number.isFinite(start) ? start : -1,
+      end: Number.isFinite(end) ? end : -1,
+      tokenType,
+    });
+  };
+
+  const getPersonLabelById = (personId) => {
+    const person = people[personId];
+    if (!person) return `#${personId}`;
+    return (person.value ?? "").trim() || "?";
+  };
+
+  const validateFamilyTreeSemantics = () => {
+    const edges = [];
+
+    unions.forEach((union) => {
+      const members = union.members || [];
+      const children = union.children || [];
+
+      children.forEach((child) => {
+        members.forEach((member) => {
+          edges.push({
+            from: member.personId,
+            to: child.personId,
+            start: union.start,
+            end: union.end,
+            tokenType: "UNION",
+          });
+        });
+      });
+    });
+
+    singleParentLinks.forEach((link) => {
+      edges.push({
+        from: link.parent?.personId,
+        to: link.child?.personId,
+        start: link.start,
+        end: link.end,
+        tokenType: "SINGLE_PARENT",
+      });
+    });
+
+    const uniqueSelfLoopKeys = new Set();
+    edges.forEach((edge) => {
+      if (edge.from == null || edge.to == null) return;
+      if (edge.from !== edge.to) return;
+
+      const key = `${edge.from}:${edge.start}:${edge.end}`;
+      if (uniqueSelfLoopKeys.has(key)) return;
+      uniqueSelfLoopKeys.add(key);
+
+      const label = getPersonLabelById(edge.from);
+      addSemanticError(
+        `Invalid family tree: '${label}' cannot be their own parent/child.`,
+        edge.start,
+        edge.end,
+        edge.tokenType
+      );
+    });
+
+    const adjacency = new Map();
+    for (const person of people) {
+      adjacency.set(person.id, []);
+    }
+
+    edges.forEach((edge) => {
+      if (edge.from == null || edge.to == null) return;
+      if (edge.from === edge.to) return;
+      if (!adjacency.has(edge.from)) {
+        adjacency.set(edge.from, []);
+      }
+      adjacency.get(edge.from).push(edge);
+    });
+
+    const state = new Map();
+    const stackPeople = [];
+    const stackEdges = [];
+    const reportedCycleKeys = new Set();
+
+    const visit = (personId) => {
+      state.set(personId, 1);
+      stackPeople.push(personId);
+
+      const outgoing = adjacency.get(personId) || [];
+      outgoing.forEach((edge) => {
+        const nextId = edge.to;
+        const nextState = state.get(nextId) || 0;
+
+        if (nextState === 0) {
+          stackEdges.push(edge);
+          visit(nextId);
+          stackEdges.pop();
+          return;
+        }
+
+        if (nextState !== 1) {
+          return;
+        }
+
+        const cycleStartIndex = stackPeople.lastIndexOf(nextId);
+        if (cycleStartIndex < 0) {
+          return;
+        }
+
+        const cyclePeople = stackPeople.slice(cycleStartIndex);
+        const cycleEdges = stackEdges.slice(cycleStartIndex);
+        cycleEdges.push(edge);
+
+        const normalizedCycleKey = [...new Set(cyclePeople)].sort((a, b) => a - b).join(",");
+        if (reportedCycleKeys.has(normalizedCycleKey)) {
+          return;
+        }
+        reportedCycleKeys.add(normalizedCycleKey);
+
+        const cyclePathIds = [...cyclePeople, nextId];
+        const cyclePathLabels = cyclePathIds.map((id) => getPersonLabelById(id));
+        const cycleStart = Math.min(...cycleEdges.map((item) => item.start ?? -1));
+        const cycleEnd = Math.max(...cycleEdges.map((item) => item.end ?? -1));
+
+        addSemanticError(
+          `Invalid family tree: ancestry loop detected (${cyclePathLabels.join(" -> ")}).`,
+          cycleStart,
+          cycleEnd,
+          "ANCESTRY_LOOP"
+        );
+      });
+
+      stackPeople.pop();
+      state.set(personId, 2);
+    };
+
+    for (const person of people) {
+      if ((state.get(person.id) || 0) === 0) {
+        visit(person.id);
+      }
+    }
+  };
+
   const buildUnionKey = (members) =>
     members
       .map((member) => member.personId)
@@ -330,6 +471,8 @@ export function parse(tokens) {
     addError(`Unexpected token '${peek()?.type ?? "UNKNOWN"}'.`, peek());
     advance();
   }
+
+  validateFamilyTreeSemantics();
 
   return {
     type: "Document",

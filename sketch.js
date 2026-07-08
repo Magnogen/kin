@@ -1,4 +1,5 @@
 import { createCanvasPreview } from "./canvas.js";
+import { highlightSource } from "./highlight.js";
 import { initializeThemeToggle } from "./theme.js";
 import { tokenize } from "./kin/tokenize.js";
 import { parse } from "./kin/parse.js";
@@ -9,17 +10,9 @@ const canvas = $("#preview-canvas");
 const themeToggle = $("#theme-toggle");
 // const tokenDebug = $("#token-debug");
 
-function escapeHtml(text) {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
 function updateHighlight() {
   const source = editor.value || "";
-  // This layer mirrors editor content and can later be replaced with tokenized HTML.
-  highlightLayer.innerHTML = escapeHtml(source) || "\u200b";
+  highlightLayer.innerHTML = highlightSource(source);
   highlightLayer.scrollTop = editor.scrollTop;
   highlightLayer.scrollLeft = editor.scrollLeft;
 }

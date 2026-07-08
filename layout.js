@@ -4,18 +4,21 @@ const DEFAULT_LAYOUT_OPTIONS = {
   personPaddingX: 16,
   personLineHeight: 16,
   personPaddingY: 16,
-  personNameFontSize: 14,
-  personNoteFontSize: 11,
+  personNameFontSize: 16,
+  personNoteFontSize: 12,
   personNameFontWeight: "400",
   personNoteFontWeight: "400",
   personFontFamily: "IBM Plex Sans, Segoe UI, sans-serif",
-  personGap: 34,
+  personGap: 32,
   generationGap: 64,
-  unionSize: 8,
+  unionSize: 16,
   unionOffsetY: 0,
   paddingX: 24,
   paddingY: 24,
   iterations: 8,
+  childGroupThreshold: 5,
+  childGroupMaxColumns: 3,
+  childGroupRowGap: 20,
 };
 
 function average(values) {
@@ -183,6 +186,38 @@ function enforceMinGap(sortedItems, minGap) {
     const nextX = Math.max(current.x, prev.x + minGap);
     current.x = nextX;
   }
+}
+
+function getChildGroupColumnCount(childCount, options) {
+  if (childCount < options.childGroupThreshold) {
+    return null;
+  }
+
+  return Math.max(
+    2,
+    Math.min(options.childGroupMaxColumns, Math.ceil(Math.sqrt(childCount)))
+  );
+}
+
+function computeChildGroupSpanWidth(childIds, personWidthById, options) {
+  const columns = getChildGroupColumnCount(childIds.length, options);
+  if (!columns) {
+    return null;
+  }
+
+  let maxRowWidth = 0;
+
+  for (let start = 0; start < childIds.length; start += columns) {
+    const rowIds = childIds.slice(start, start + columns);
+    const rowWidth = rowIds.reduce(
+      (sum, personId) => sum + (personWidthById.get(personId) ?? options.personWidth),
+      0
+    );
+    const rowGapWidth = Math.max(0, rowIds.length - 1) * options.personGap;
+    maxRowWidth = Math.max(maxRowWidth, rowWidth + rowGapWidth);
+  }
+
+  return maxRowWidth;
 }
 
 function buildUnionComponentsForGeneration(
@@ -354,9 +389,32 @@ function compactGenerationIntoBlocks(
   orderedComponentIdsByPerson,
   xByPersonId,
   pinnedByPersonId,
-  parentUnionIdsByPerson,
-  minGap
+  parentAnchorIdsByPerson,
+  minGap,
+  groupedSpanWidthByParentAnchor
 ) {
+  const getBlockIntraGap = (ids, baseGap) => {
+    if (ids.length <= 1) {
+      return 0;
+    }
+
+    const sharedParentAnchorIds = [
+      ...new Set(ids.flatMap((personId) => parentAnchorIdsByPerson.get(personId) || [])),
+    ];
+
+    if (sharedParentAnchorIds.length !== 1) {
+      return baseGap;
+    }
+
+    const groupedWidth = groupedSpanWidthByParentAnchor.get(sharedParentAnchorIds[0]);
+    if (!Number.isFinite(groupedWidth)) {
+      return baseGap;
+    }
+
+    const compressedGap = groupedWidth / (ids.length - 1);
+    return Math.max(0, Math.min(baseGap, compressedGap));
+  };
+
   const blocks = [];
   const consumed = new Set();
 
@@ -406,17 +464,17 @@ function compactGenerationIntoBlocks(
     });
   });
 
-  const parentUnionToBlockIndices = new Map();
+  const parentAnchorToBlockIndices = new Map();
   personIds.forEach((personId) => {
     const blockIndex = personToBlockIndex.get(personId);
     if (blockIndex == null) return;
 
-    const parentUnionIds = parentUnionIdsByPerson.get(personId) || [];
-    parentUnionIds.forEach((unionId) => {
-      if (!parentUnionToBlockIndices.has(unionId)) {
-        parentUnionToBlockIndices.set(unionId, new Set());
+    const parentAnchorIds = parentAnchorIdsByPerson.get(personId) || [];
+    parentAnchorIds.forEach((anchorId) => {
+      if (!parentAnchorToBlockIndices.has(anchorId)) {
+        parentAnchorToBlockIndices.set(anchorId, new Set());
       }
-      parentUnionToBlockIndices.get(unionId).add(blockIndex);
+      parentAnchorToBlockIndices.get(anchorId).add(blockIndex);
     });
   });
 
@@ -447,7 +505,7 @@ function compactGenerationIntoBlocks(
     }
   };
 
-  parentUnionToBlockIndices.forEach((indices) => {
+  parentAnchorToBlockIndices.forEach((indices) => {
     const list = [...indices];
     if (list.length < 2) return;
     const anchor = list[0];
@@ -470,10 +528,21 @@ function compactGenerationIntoBlocks(
     members.sort((a, b) => a.center - b.center);
     const ids = members.flatMap((block) => block.ids);
 
-    const width = (ids.length - 1) * minGap;
+    let width = (ids.length - 1) * minGap;
+    const sharedParentAnchorIds = [...new Set(
+      ids.flatMap((personId) => parentAnchorIdsByPerson.get(personId) || [])
+    )];
+    if (sharedParentAnchorIds.length === 1) {
+      const groupedWidth = groupedSpanWidthByParentAnchor.get(sharedParentAnchorIds[0]);
+      if (Number.isFinite(groupedWidth)) {
+        width = Math.min(width, Math.max(0, groupedWidth - minGap));
+      }
+    }
+
     const center = average(ids.map((id) => xByPersonId.get(id) ?? 0));
     const start = anchoredStartForIds(ids, width);
-    mergedBlocks.push({ ids, center, width, start });
+    const intraGap = getBlockIntraGap(ids, minGap);
+    mergedBlocks.push({ ids, center, width, start, intraGap });
   });
 
   mergedBlocks.sort((a, b) => a.center - b.center);
@@ -514,7 +583,7 @@ function compactGenerationIntoBlocks(
   const placed = new Map();
   mergedBlocks.forEach((block) => {
     block.ids.forEach((personId, index) => {
-      placed.set(personId, block.start + index * minGap);
+      placed.set(personId, block.start + index * block.intraGap);
     });
   });
 
@@ -567,6 +636,313 @@ function enforceCenterGapByWidth(personIds, centerByPersonId, widthByPersonId, g
   ordered.forEach((item) => {
     centerByPersonId.set(item.personId, item.center);
   });
+}
+
+function buildGroupedChildLayout(
+  unions,
+  singleParentLinks,
+  personGeneration,
+  personX,
+  unionX,
+  personWidthById,
+  personHeightById,
+  people,
+  options
+) {
+  const positionOverrides = new Map();
+  const yOffsets = new Map();
+  const groupedPeople = new Set();
+  const groupLayoutsByGeneration = new Map();
+  const groupedGenerations = new Set();
+  const rowGap = Math.max(8, options.childGroupRowGap);
+
+  const applyGroup = (childIds, anchorX, generation) => {
+    const uniqueIds = [...new Set(childIds)]
+      .filter((personId) => !groupedPeople.has(personId))
+      .sort((a, b) => {
+        const delta = (personX.get(a) ?? 0) - (personX.get(b) ?? 0);
+        if (delta !== 0) return delta;
+        const aSort = people.get(a)?.sortIndex ?? a;
+        const bSort = people.get(b)?.sortIndex ?? b;
+        return aSort - bSort;
+      });
+
+    const columns = getChildGroupColumnCount(uniqueIds.length, options);
+    if (!columns) {
+      return;
+    }
+
+    let minLeft = Infinity;
+    let maxRight = -Infinity;
+    let minTop = Infinity;
+    let maxBottom = -Infinity;
+    const rowProfiles = [];
+    let nextRowOffsetY = 0;
+    for (let start = 0; start < uniqueIds.length; start += columns) {
+      const rowIds = uniqueIds.slice(start, start + columns);
+      let rowHeight = 0;
+      const rowWidths = rowIds.map(
+        (personId) => personWidthById.get(personId) ?? options.personWidth
+      );
+
+      const rowWidth = rowWidths.reduce((sum, width) => sum + width, 0);
+      const rowGapWidth = Math.max(0, rowIds.length - 1) * options.personGap;
+      const rowStartX = anchorX - (rowWidth + rowGapWidth) / 2;
+      let cursorX = rowStartX;
+      let rowMinLeft = Infinity;
+      let rowMaxRight = -Infinity;
+
+      rowIds.forEach((personId) => {
+        rowHeight = Math.max(rowHeight, personHeightById.get(personId) ?? options.personHeight);
+      });
+
+      rowIds.forEach((personId, columnIndex) => {
+        const width = rowWidths[columnIndex];
+        const centerX = cursorX + width / 2;
+        const personHeight = personHeightById.get(personId) ?? options.personHeight;
+        positionOverrides.set(personId, centerX);
+        yOffsets.set(personId, nextRowOffsetY);
+        groupedPeople.add(personId);
+        minLeft = Math.min(minLeft, centerX - width / 2);
+        maxRight = Math.max(maxRight, centerX + width / 2);
+        rowMinLeft = Math.min(rowMinLeft, centerX - width / 2);
+        rowMaxRight = Math.max(rowMaxRight, centerX + width / 2);
+        minTop = Math.min(minTop, nextRowOffsetY);
+        maxBottom = Math.max(maxBottom, nextRowOffsetY + personHeight);
+        cursorX += width + options.personGap;
+      });
+
+      rowProfiles.push({
+        minTop: nextRowOffsetY,
+        maxBottom: nextRowOffsetY + rowHeight,
+        minLeft: rowMinLeft,
+        maxRight: rowMaxRight,
+      });
+
+      nextRowOffsetY += rowHeight + rowGap;
+    }
+
+    if (!groupLayoutsByGeneration.has(generation)) {
+      groupLayoutsByGeneration.set(generation, []);
+    }
+
+    groupLayoutsByGeneration.get(generation).push({
+      personIds: uniqueIds,
+      targetCenter: anchorX,
+      minLeft,
+      maxRight,
+      minTop,
+      maxBottom,
+      rowProfiles,
+      sortIndex: Math.min(...uniqueIds.map((personId) => people.get(personId)?.sortIndex ?? personId)),
+      isFixed: false,
+    });
+    groupedGenerations.add(generation);
+  };
+
+  const relaxGroupOverlaps = () => {
+    groupLayoutsByGeneration.forEach((groups) => {
+      if (groups.length < 2) {
+        return;
+      }
+
+      const rowOverlapsVertically = (aRow, bRow) =>
+        aRow.minTop < bRow.maxBottom && bRow.minTop < aRow.maxBottom;
+
+      const requiredShiftToClear = (leftGroup, rightGroup, minGap) => {
+        let requiredShift = -Infinity;
+
+        for (const leftRow of leftGroup.rowProfiles) {
+          for (const rightRow of rightGroup.rowProfiles) {
+            if (!rowOverlapsVertically(leftRow, rightRow)) {
+              continue;
+            }
+
+            const constraint =
+              leftRow.maxRight + leftGroup.shift + minGap - rightRow.minLeft;
+            requiredShift = Math.max(requiredShift, constraint);
+          }
+        }
+
+        return requiredShift;
+      };
+
+      const allowedShiftToClear = (leftGroup, rightGroup, minGap) => {
+        let allowedShift = Infinity;
+
+        for (const leftRow of leftGroup.rowProfiles) {
+          for (const rightRow of rightGroup.rowProfiles) {
+            if (!rowOverlapsVertically(leftRow, rightRow)) {
+              continue;
+            }
+
+            const constraint =
+              rightRow.minLeft + rightGroup.shift - minGap - leftRow.maxRight;
+            allowedShift = Math.min(allowedShift, constraint);
+          }
+        }
+
+        return allowedShift;
+      };
+
+      groups.sort((a, b) => {
+        const delta = a.targetCenter - b.targetCenter;
+        if (delta !== 0) return delta;
+        const aSort = a.sortIndex ?? a.personIds[0] ?? 0;
+        const bSort = b.sortIndex ?? b.personIds[0] ?? 0;
+        return aSort - bSort;
+      });
+      groups.forEach((group) => {
+        group.shift = 0;
+      });
+
+      const minGap = options.personGap;
+      const relaxForward = () => {
+        for (let i = 1; i < groups.length; i += 1) {
+          const current = groups[i];
+          let requiredShift = current.shift;
+
+          for (let j = 0; j < i; j += 1) {
+            const prev = groups[j];
+            const pairRequiredShift = requiredShiftToClear(prev, current, minGap);
+            if (!Number.isFinite(pairRequiredShift)) {
+              continue;
+            }
+            requiredShift = Math.max(requiredShift, pairRequiredShift);
+          }
+
+          if (current.shift < requiredShift) {
+            current.shift = requiredShift;
+          }
+        }
+      };
+
+      const relaxBackward = () => {
+        for (let i = groups.length - 2; i >= 0; i -= 1) {
+          const current = groups[i];
+          let allowedShift = current.shift;
+
+          for (let j = groups.length - 1; j > i; j -= 1) {
+            const next = groups[j];
+            const pairAllowedShift = allowedShiftToClear(current, next, minGap);
+            if (!Number.isFinite(pairAllowedShift)) {
+              continue;
+            }
+            allowedShift = Math.min(allowedShift, pairAllowedShift);
+          }
+
+          if (current.shift > allowedShift) {
+            current.shift = allowedShift;
+          }
+        }
+      };
+
+      relaxForward();
+      relaxBackward();
+      relaxForward();
+
+      groups.forEach((group) => {
+        if (!group.shift) {
+          return;
+        }
+
+        group.personIds.forEach((personId) => {
+          const baseX = positionOverrides.get(personId) ?? personX.get(personId) ?? 0;
+          positionOverrides.set(personId, baseX + group.shift);
+        });
+      });
+    });
+  };
+
+  unions.forEach((union) => {
+    const childIds = (union.children || []).map((child) => child.personId);
+    if (!childIds.length) return;
+
+    const generation = personGeneration.get(childIds[0]) ?? null;
+    if (generation == null) return;
+    if (!childIds.every((personId) => (personGeneration.get(personId) ?? null) === generation)) {
+      return;
+    }
+
+    applyGroup(
+      childIds,
+      unionX.get(union.id) ?? average(childIds.map((personId) => personX.get(personId) ?? 0)),
+      generation
+    );
+  });
+
+  const childIdsByParent = new Map();
+  singleParentLinks.forEach((link) => {
+    const parentId = link.parent?.personId;
+    const childId = link.child?.personId;
+    if (parentId == null || childId == null) return;
+
+    if (!childIdsByParent.has(parentId)) {
+      childIdsByParent.set(parentId, []);
+    }
+    childIdsByParent.get(parentId).push(childId);
+  });
+
+  childIdsByParent.forEach((childIds, parentId) => {
+    const generation = personGeneration.get(childIds[0]) ?? null;
+    if (generation == null) {
+      return;
+    }
+    if (!childIds.every((personId) => (personGeneration.get(personId) ?? null) === generation)) {
+      return;
+    }
+
+    applyGroup(
+      childIds,
+      personX.get(parentId) ?? average(childIds.map((personId) => personX.get(personId) ?? 0)),
+      generation
+    );
+  });
+
+  groupedGenerations.forEach((generation) => {
+    const entries = groupLayoutsByGeneration.get(generation) || [];
+
+    for (const [personId, personMeta] of people.entries()) {
+      if ((personGeneration.get(personId) ?? null) !== generation) {
+        continue;
+      }
+      if (groupedPeople.has(personId)) {
+        continue;
+      }
+
+      const width = personWidthById.get(personId) ?? options.personWidth;
+      const height = personHeightById.get(personId) ?? options.personHeight;
+      const centerX = personX.get(personId) ?? 0;
+
+      entries.push({
+        personIds: [personId],
+        targetCenter: centerX,
+        minLeft: centerX - width / 2,
+        maxRight: centerX + width / 2,
+        minTop: 0,
+        maxBottom: height,
+        rowProfiles: [
+          {
+            minTop: 0,
+            maxBottom: height,
+            minLeft: centerX - width / 2,
+            maxRight: centerX + width / 2,
+          },
+        ],
+        sortIndex: personMeta?.sortIndex ?? personId,
+        isFixed: true,
+      });
+    }
+
+    groupLayoutsByGeneration.set(generation, entries);
+  });
+
+  relaxGroupOverlaps();
+
+  return {
+    positionOverrides,
+    yOffsets,
+  };
 }
 
 export function layoutFamilyTree(ast, userOptions = {}) {
@@ -699,6 +1075,12 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         personGeneration.set(childId, impliedFromParent);
         changed = true;
       }
+
+      const impliedFromChild = childGeneration - 1;
+      if (impliedFromChild > parentGeneration) {
+        personGeneration.set(parentId, impliedFromChild);
+        changed = true;
+      }
     });
 
     if (!changed) break;
@@ -715,6 +1097,22 @@ export function layoutFamilyTree(ast, userOptions = {}) {
 
   const generationKeys = [...generations.keys()].sort((a, b) => a - b);
   const nominalCenterGap = options.personWidth + options.personGap;
+  const groupedSpanWidthByParentAnchor = new Map();
+
+  unions.forEach((union) => {
+    const childIds = (union.children || []).map((child) => child.personId);
+    const groupedWidth = computeChildGroupSpanWidth(childIds, personWidthById, options);
+    if (Number.isFinite(groupedWidth)) {
+      groupedSpanWidthByParentAnchor.set(`u:${union.id}`, groupedWidth);
+    }
+  });
+
+  childPeopleByPerson.forEach((childIds, parentId) => {
+    const groupedWidth = computeChildGroupSpanWidth(childIds, personWidthById, options);
+    if (Number.isFinite(groupedWidth)) {
+      groupedSpanWidthByParentAnchor.set(`p:${parentId}`, groupedWidth);
+    }
+  });
 
   const componentsByGeneration = new Map();
   const orderedComponentIdsByGeneration = new Map();
@@ -796,6 +1194,22 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     return average(centers);
   };
 
+  const seededGroupedChildLayout = buildGroupedChildLayout(
+    unions,
+    singleParentLinks,
+    personGeneration,
+    personX,
+    unionX,
+    personWidthById,
+    personHeightById,
+    people,
+    options
+  );
+
+  seededGroupedChildLayout.positionOverrides.forEach((centerX, personId) => {
+    personX.set(personId, centerX);
+  });
+
   for (let i = 0; i < options.iterations; i += 1) {
     unions.forEach((union) => {
       unionX.set(union.id, getUnionCenterX(union));
@@ -805,7 +1219,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       const personIds = generations.get(generation) || [];
       const desiredByPersonId = new Map();
       const pinnedByPersonId = new Map();
-      const parentUnionIdsByPerson = new Map();
+      const parentAnchorIdsByPerson = new Map();
 
       personIds.forEach((personId) => {
         const parentUnionIds = parentUnionsByPerson.get(personId) || [];
@@ -813,9 +1227,9 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         const parentPersonIds = parentPeopleByPerson.get(personId) || [];
         const childPersonIds = childPeopleByPerson.get(personId) || [];
 
-        parentUnionIdsByPerson.set(personId, [
-          ...parentUnionIds,
-          ...parentPersonIds.map((parentId) => `parent:${parentId}`),
+        parentAnchorIdsByPerson.set(personId, [
+          ...parentUnionIds.map((unionId) => `u:${unionId}`),
+          ...parentPersonIds.map((parentId) => `p:${parentId}`),
         ]);
 
         const parentTargets = parentUnionIds
@@ -828,20 +1242,19 @@ export function layoutFamilyTree(ast, userOptions = {}) {
           .filter((value) => Number.isFinite(value));
         const memberTargets = memberUnionIds
           .map((unionId) => unionX.get(unionId))
-          .concat(
-            childPersonIds
-              .map((childId) => personX.get(childId))
-              .filter((value) => Number.isFinite(value))
-          )
           .filter((value) => Number.isFinite(value));
 
         const current = personX.get(personId) ?? 0;
         const parentBias = parentTargets.length ? average(parentTargets) : current;
         const memberBias = memberTargets.length ? average(memberTargets) : current;
-        const nextX = parentTargets.length ? parentBias : memberBias;
+        const nextX = parentTargets.length && memberTargets.length
+          ? parentBias + (memberBias - parentBias) * 0.25
+          : parentTargets.length
+          ? parentBias
+          : memberBias;
 
         desiredByPersonId.set(personId, Number.isFinite(nextX) ? nextX : current);
-        pinnedByPersonId.set(personId, parentTargets.length > 0);
+        pinnedByPersonId.set(personId, parentUnionIds.length > 0 && memberTargets.length === 0);
       });
 
       const componentMap = componentsByGeneration.get(generation) || new Map();
@@ -853,8 +1266,9 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         orderedComponentIdsByPerson,
         desiredByPersonId,
         pinnedByPersonId,
-        parentUnionIdsByPerson,
-        nominalCenterGap
+        parentAnchorIdsByPerson,
+        nominalCenterGap,
+        groupedSpanWidthByParentAnchor
       );
 
       personIds.forEach((personId) => {
@@ -862,7 +1276,16 @@ export function layoutFamilyTree(ast, userOptions = {}) {
         personX.set(personId, x);
       });
 
-      enforceCenterGapByWidth(personIds, personX, personWidthById, options.personGap);
+      const hasGroupedSpan = personIds.some((personId) => {
+        const anchorIds = parentAnchorIdsByPerson.get(personId) || [];
+        return anchorIds.some((anchorId) =>
+          Number.isFinite(groupedSpanWidthByParentAnchor.get(anchorId))
+        );
+      });
+
+      if (!hasGroupedSpan) {
+        enforceCenterGapByWidth(personIds, personX, personWidthById, options.personGap);
+      }
     });
   }
 
@@ -879,7 +1302,8 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     personIds.forEach((personId) => {
       const height = personHeightById.get(personId) ?? options.personHeight;
       personHeightById.set(personId, height);
-      maxHeight = Math.max(maxHeight, height);
+      const yOffset = seededGroupedChildLayout.yOffsets.get(personId) ?? 0;
+      maxHeight = Math.max(maxHeight, yOffset + height);
     });
 
     generationHeight.set(generation, maxHeight);
@@ -892,6 +1316,22 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     cursorY += (generationHeight.get(generation) ?? options.personHeight) + options.generationGap;
   });
 
+  const groupedChildLayout = buildGroupedChildLayout(
+    unions,
+    singleParentLinks,
+    personGeneration,
+    personX,
+    unionX,
+    personWidthById,
+    personHeightById,
+    people,
+    options
+  );
+
+  groupedChildLayout.positionOverrides.forEach((centerX, personId) => {
+    personX.set(personId, centerX);
+  });
+
   const nodes = [];
   const edges = [];
 
@@ -900,7 +1340,9 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     const width = personWidthById.get(personId) ?? options.personWidth;
     const centerX = personX.get(personId) ?? 0;
     const x = options.paddingX + centerX - width / 2;
-    const y = generationTop.get(generation) ?? options.paddingY;
+    const y =
+      (generationTop.get(generation) ?? options.paddingY) +
+      (seededGroupedChildLayout.yOffsets.get(personId) ?? 0);
     const meta = people.get(personId);
     const annotations = personAnnotationsById.get(personId) || [];
     const height = personHeightById.get(personId) ?? options.personHeight;
