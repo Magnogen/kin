@@ -205,7 +205,33 @@ export function createCanvasPreview(canvas) {
     viewState.pinchStartDistance = distance;
     viewState.pinchStartZoom = viewState.zoom;
     viewState.pinchLastMidpoint = midpoint;
+  }
+
+  function startPanning(pointerId, point) {
+    viewState.pointerId = pointerId;
+    viewState.lastX = point.x;
+    viewState.lastY = point.y;
+  }
+
+  function setInteractionFlags(state) {
+    viewState.isPanning = state === "panning";
+    viewState.isPinching = state === "pinching";
     updateCursor();
+  }
+
+  function teardownPointer(event) {
+    if (!event) return;
+
+    viewState.activePointers.delete(event.pointerId);
+    if (canvas.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function canHandlePointer(event) {
+    if (!currentViewport) return false;
+    if (event.pointerType === "mouse" && event.button !== 0) return false;
+    return true;
   }
 
   function applyPinchTransform(previousMidpoint, currentMidpoint, nextZoom) {
@@ -333,7 +359,7 @@ export function createCanvasPreview(canvas) {
     const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
 
     ctx.strokeStyle = colors.connector;
-    ctx.lineWidth = Math.max(1.2, 1.8 * scale);
+    ctx.lineWidth = 1.8 * scale;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
@@ -387,16 +413,16 @@ export function createCanvasPreview(canvas) {
         roundedRectPath(x, y, width, height, radius);
         ctx.fillStyle = node.kind === "unknown" ? colors.personUnknownFill : colors.personFill;
         ctx.strokeStyle = node.kind === "unknown" ? colors.personUnknownStroke : colors.personStroke;
-        ctx.lineWidth = Math.max(1.1, 1.4 * scale);
+        ctx.lineWidth = 1.4 * scale;
         ctx.fill();
         ctx.stroke();
 
         ctx.fillStyle = colors.label;
-        const nameSize = Math.max(11, 14 * scale);
-        const noteSize = Math.max(10, 11 * scale);
+        const nameSize = 14 * scale;
+        const noteSize = 11 * scale;
         const notes = annotationLines(node.annotations);
-        const lineGap = Math.max(2, 2 * scale);
-        const boxPadY = Math.max(6, 7 * scale);
+        const lineGap = 2 * scale;
+        const boxPadY = 7 * scale;
 
         ctx.font = `${nameSize}px IBM Plex Sans, Segoe UI, sans-serif`;
         ctx.textAlign = "center";
@@ -434,14 +460,14 @@ export function createCanvasPreview(canvas) {
           ctx.fillStyle = colors.annotation;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          const noteSize = Math.max(5, 11 * scale);
-          const lineGap = Math.max(2, 2 * scale);
+          const noteSize = 11 * scale;
+          const lineGap = 2 * scale;
           const lineHeight = noteSize + lineGap;
-          const topPadding = Math.max(2, 18 * scale);
+          const topPadding = 18 * scale;
           const labelY = centerY - radius - topPadding - notes.length * lineHeight;
           ctx.font = `${noteSize}px IBM Plex Sans, Segoe UI, sans-serif`;
           notes.forEach((note, index) => {
-            const text = truncateLabel(note, Math.max(140, 220 * scale));
+            const text = truncateLabel(note, 220 * scale);
             ctx.fillText(text, centerX, labelY + index * lineHeight);
           });
         }
@@ -493,36 +519,103 @@ export function createCanvasPreview(canvas) {
     redraw();
   }
 
-  function handlePointerDown(event) {
-    if (!currentViewport) return;
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-
-    const point = canvasPointFromEvent(event);
-    viewState.activePointers.set(event.pointerId, point);
-
+  function releaseToNextState() {
     if (viewState.activePointers.size >= 2) {
       beginPinch();
-    } else {
-      viewState.isPanning = true;
-      viewState.pointerId = event.pointerId;
-      viewState.lastX = point.x;
-      viewState.lastY = point.y;
+      return "pinching";
     }
 
-    canvas.setPointerCapture(event.pointerId);
-    event.preventDefault();
-    updateCursor();
+    viewState.pinchLastMidpoint = null;
+    if (viewState.activePointers.size === 1) {
+      const [pointerId, point] = [...viewState.activePointers.entries()][0];
+      startPanning(pointerId, point);
+      return "panning";
+    }
+
+    viewState.pointerId = null;
+    return "idle";
   }
 
-  function handlePointerMove(event) {
-    if (!viewState.activePointers.has(event.pointerId)) {
-      return;
-    }
+  const interactionFSM = FSM({
+    "idle:POINTER_DOWN": (event) => {
+      if (!canHandlePointer(event)) return "idle";
 
-    const point = canvasPointFromEvent(event);
-    viewState.activePointers.set(event.pointerId, point);
+      const point = canvasPointFromEvent(event);
+      viewState.activePointers.set(event.pointerId, point);
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
 
-    if (viewState.isPinching && viewState.activePointers.size >= 2) {
+      if (viewState.activePointers.size >= 2) {
+        beginPinch();
+        return "pinching";
+      }
+
+      startPanning(event.pointerId, point);
+      return "panning";
+    },
+    "idle:POINTER_MOVE": () => "idle",
+    "idle:POINTER_UP": () => "idle",
+    "idle:POINTER_CANCEL": () => "idle",
+
+    "panning:POINTER_DOWN": (event) => {
+      if (!canHandlePointer(event)) return "panning";
+
+      const point = canvasPointFromEvent(event);
+      viewState.activePointers.set(event.pointerId, point);
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+
+      if (viewState.activePointers.size >= 2) {
+        beginPinch();
+        return "pinching";
+      }
+
+      return "panning";
+    },
+    "panning:POINTER_MOVE": (event) => {
+      if (!viewState.activePointers.has(event.pointerId)) return "panning";
+      if (event.pointerId !== viewState.pointerId) return "panning";
+
+      const point = canvasPointFromEvent(event);
+      viewState.activePointers.set(event.pointerId, point);
+
+      const dx = point.x - viewState.lastX;
+      const dy = point.y - viewState.lastY;
+
+      viewState.panX += dx;
+      viewState.panY += dy;
+      viewState.lastX = point.x;
+      viewState.lastY = point.y;
+      redraw();
+
+      return "panning";
+    },
+    "panning:POINTER_UP": (event) => {
+      teardownPointer(event);
+      return releaseToNextState();
+    },
+    "panning:POINTER_CANCEL": (event) => {
+      teardownPointer(event);
+      return releaseToNextState();
+    },
+
+    "pinching:POINTER_DOWN": (event) => {
+      if (!canHandlePointer(event)) return "pinching";
+
+      const point = canvasPointFromEvent(event);
+      viewState.activePointers.set(event.pointerId, point);
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      beginPinch();
+      return "pinching";
+    },
+    "pinching:POINTER_MOVE": (event) => {
+      if (!viewState.activePointers.has(event.pointerId)) return "pinching";
+
+      const point = canvasPointFromEvent(event);
+      viewState.activePointers.set(event.pointerId, point);
+      if (viewState.activePointers.size < 2) return "pinching";
+
       const pointers = [...viewState.activePointers.values()];
       const distance = Math.max(1, pointerDistance(pointers[0], pointers[1]));
       const midpoint = pointerMidpoint(pointers[0], pointers[1]);
@@ -536,65 +629,22 @@ export function createCanvasPreview(canvas) {
       }
 
       viewState.pinchLastMidpoint = midpoint;
-
       event.preventDefault();
-      return;
-    }
+      return "pinching";
+    },
+    "pinching:POINTER_UP": (event) => {
+      teardownPointer(event);
+      return releaseToNextState();
+    },
+    "pinching:POINTER_CANCEL": (event) => {
+      teardownPointer(event);
+      return releaseToNextState();
+    },
+  }, "idle");
 
-    if (!viewState.isPanning || event.pointerId !== viewState.pointerId) {
-      return;
-    }
-
-    const dx = point.x - viewState.lastX;
-    const dy = point.y - viewState.lastY;
-
-    viewState.panX += dx;
-    viewState.panY += dy;
-    viewState.lastX = point.x;
-    viewState.lastY = point.y;
-
-    redraw();
-  }
-
-  function stopPanning(event) {
-    if (!event) return;
-
-    viewState.activePointers.delete(event.pointerId);
-
-    if (canvas.hasPointerCapture(event.pointerId)) {
-      canvas.releasePointerCapture(event.pointerId);
-    }
-
-    if (viewState.isPinching) {
-      if (viewState.activePointers.size >= 2) {
-        beginPinch();
-        return;
-      }
-
-      viewState.isPinching = false;
-      viewState.pinchLastMidpoint = null;
-
-      const remaining = [...viewState.activePointers.entries()];
-      if (remaining.length === 1) {
-        const [pointerId, point] = remaining[0];
-        viewState.isPanning = true;
-        viewState.pointerId = pointerId;
-        viewState.lastX = point.x;
-        viewState.lastY = point.y;
-      } else {
-        viewState.isPanning = false;
-        viewState.pointerId = null;
-      }
-
-      updateCursor();
-      return;
-    }
-
-    if (event.pointerId === viewState.pointerId) {
-      viewState.isPanning = false;
-      viewState.pointerId = null;
-      updateCursor();
-    }
+  function dispatchPointerEvent(eventName, event) {
+    const nextState = interactionFSM.call(eventName, event);
+    setInteractionFlags(nextState);
   }
 
   function handleWheel(event) {
@@ -618,10 +668,10 @@ export function createCanvasPreview(canvas) {
 
   window.addEventListener("resize", redraw);
   canvas.style.touchAction = "none";
-  canvas.addEventListener("pointerdown", handlePointerDown);
-  window.addEventListener("pointermove", handlePointerMove);
-  window.addEventListener("pointerup", stopPanning);
-  window.addEventListener("pointercancel", stopPanning);
+  canvas.addEventListener("pointerdown", (event) => dispatchPointerEvent("POINTER_DOWN", event));
+  window.addEventListener("pointermove", (event) => dispatchPointerEvent("POINTER_MOVE", event));
+  window.addEventListener("pointerup", (event) => dispatchPointerEvent("POINTER_UP", event));
+  window.addEventListener("pointercancel", (event) => dispatchPointerEvent("POINTER_CANCEL", event));
   canvas.addEventListener("wheel", handleWheel, { passive: false });
   canvas.addEventListener("dblclick", handleDoubleClick);
 

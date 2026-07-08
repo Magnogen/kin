@@ -563,19 +563,9 @@ export function layoutFamilyTree(ast, userOptions = {}) {
       const members = union.members || [];
       const children = union.children || [];
 
-      let memberGeneration = members.length
+      const memberGeneration = members.length
         ? Math.max(...members.map((member) => personGeneration.get(member.personId) ?? 0))
         : 0;
-
-      // Keep parent unions one generation above their known children.
-      if (children.length) {
-        const impliedFromChildren = Math.max(
-          ...children.map((child) => (personGeneration.get(child.personId) ?? 0) - 1)
-        );
-        if (Number.isFinite(impliedFromChildren) && impliedFromChildren > memberGeneration) {
-          memberGeneration = impliedFromChildren;
-        }
-      }
 
       members.forEach((member) => {
         const prev = personGeneration.get(member.personId) ?? 0;
@@ -608,12 +598,6 @@ export function layoutFamilyTree(ast, userOptions = {}) {
 
       const parentGeneration = personGeneration.get(parentId) ?? 0;
       const childGeneration = personGeneration.get(childId) ?? 0;
-
-      const impliedFromChild = childGeneration - 1;
-      if (impliedFromChild > parentGeneration) {
-        personGeneration.set(parentId, impliedFromChild);
-        changed = true;
-      }
 
       const impliedFromParent = parentGeneration + 1;
       if (impliedFromParent > childGeneration) {
