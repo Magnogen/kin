@@ -1,270 +1,75 @@
-# Kin Language Specification
+# Kin
 
-Version 0.1 - Draft
+Kin is a minimalist, line-oriented domain-specific language designed for mapping out people, lineages, and family relationships in plain text.
+This repository hosts the **Kin Interactive Workspace**—a split-screen web application featuring a live text editor on the left and a dynamic, zoomable/pannable canvas layout viewer on the right.
 
----
+## Why Kin?
 
-## 1. Introduction
+Standard genealogical software is rigid and forces you to fill out dense forms. Kin is built around the reality of research: information is often incomplete, messy, and evolving.
+ * **Human-First:** Write family trees as fast as you can type.
+ * **Tolerant of Ambiguity:** Easily map unknown or missing relatives using the ? token.
+ * **Append-Friendly:** Built to be line-oriented so you can easily append new discoveries.
 
-Kin is a human-readable language for describing people and their relationships.
-It is designed to support incomplete, uncertain, and evolving information and to be authored directly by humans.
+## The Core Concept
 
-Kin prioritizes simplicity, linearity, and tolerance of ambiguity over strict validation.
-
----
-
-## 2. Design Goals
-
-Kin is designed to be:
-
-- human-authored and human-readable
-- tolerant of unknown or partial information
-- line-oriented and append-friendly
-- minimal in syntax
-- renderer-agnostic
-- easy to parse with a simple parser
-
----
-
-## 3. Terminology
-
-Person: an individual, identified by a textual name.
-
-Union: a relationship context between two or more people.
-
-Child: a person associated with a union.
-
-Annotation: free-form text attached to a person, union, or child.
-
-Unknown person: a person whose identity is unknown, represented using ?.
-
----
-
-## 4. Lexical Structure
-
-### 4.1 Lines
-
-The input is processed line by line.
-
-Line order is significant.
-
-Empty lines are ignored.
-
-Leading and trailing whitespace on each line is ignored.
-
-### 4.2 Comments
-
-A comment line begins with `#`.
-
-Comment lines are ignored.
-
-### 4.3 Characters
-
-The following characters have special meaning:
-
-`+`  union operator
-`=`  child operator
-`|`  annotation marker
-`?`  unknown person marker
-
-All other characters are treated as literal text.
-
----
-
-## 5. Persons
-
-### 5.1 Person Declaration
-
-A person is declared by a line containing a name.
-
-Example:
+Kin uses a handful of intuitive symbols to build complex visual layouts:
 
 ```
-Alex
+Alex + Barbara        # Create a union
+| Married 2001        # Attach details to that union
+= Charlie             # Add a child to the union
+| Born 2002           # Attach details to the child
 ```
 
-A name is any non-empty text not starting with a reserved character.
+When typed into the workspace editor, this instantly generates a visual, connected tree node infrastructure on the canvas.
 
-Names MAY contain spaces.
+## Live Workspace Features
 
-Names are case-sensitive for display, but tools MAY normalize internally.
+ * **Split-Screen Execution:** Write text on the left, watch the visual graph generate on the right in real-time.
+ * **Infinite Canvas Viewer:** Zoom, pan, and drag your way through massive, multi-generational lineage trees without losing performance.
+ * **Unknown Entity Highlighting:** Visual cues specifically designed to emphasize missing research links (like ? maternal grandmother).
 
-### 5.2 Unknown Persons
+## Syntax Cheat Sheet
 
-The token `?` denotes an unknown person.
+Kin's parser relies on four simple character markers:
 
-Unknown persons MAY be combined with additional text to disambiguate identity.
+| Operator | Name | Example | Description |
+|---|---|---|---|
+| + | **Union** | Alex + Barbara | Establishes a relationship context between two or more people. |
+| = | **Child** | = Charlie | Attaches a child to the preceding union context (or single parent). |
+| | | **Annotation** | | Born 1950 | Attaches free-form metadata/notes to the immediate line above it. |
+| ? | **Unknown** | ? 1 + David | Represents a person whose identity is currently unknown. |
 
-Examples:
+### Layout Rules to Remember
 
-```
-?
-? 1
-? maternal
-Alex ???
-```
+ 1. **Forward Flow:** Unions and parent contexts apply downward until a new one is declared.
+ 2. **Strict Binding:** Annotations (|) always latch onto the *exact line* right above them.
+ 3. **Unique Unknowns:** ? 1 and ? 2 will render as separate mystery nodes, while repeated uses of ? 1 link back to the exact same unknown individual.
 
-Identical unknown tokens refer to the same unknown person.
+## Getting Started
 
-Different unknown tokens refer to different unknown persons.
+I've set up this repository with GitHub Pages, so you can just go to Https://magnogen.net/kin/ and have fun!
 
----
+Alternatively, you can...
 
-## 6. Unions
+## Getting Started Locally
 
-### 6.1 Union Declaration
+To run the web editor and layout engine locally on your machine:
 
-A union is declared using the `+` operator.
+```bash
+# Clone the repository
+git clone https://github.com/Magnogen/kin.git
+cd kin
 
-Example:
-
-```
-Alex + Barbara
-```
-
-A union MUST contain at least two persons.
-
-A union establishes a new relationship context.
-
-### 6.2 Union Continuation
-
-Whitespace around `+` is optional.
-
-Example:
-
-```
-Alex+Barbara
+# Start the development server
+bunx http-server . # or some other http alternative
 ```
 
----
+Open http://localhost:8080 (or the configured local port) in your browser to start mapping.
 
-## 7. Children
+> **Looking for the technical implementation?**
+> The formal grammar rules, error-handling states, and parser rules are documented in the [Kin Language Specification](/SPEC.md).
 
-### 7.1 Child Declaration
+## Contribution
 
-A child is declared using the `=` operator following a union.
-
-Example:
-
-```
-= Charlie
-```
-
-A child MAY also be declared inline from a single parent.
-
-Example:
-
-```
-Alex = Charlie
-```
-
-In this form, `Alex` is treated as the sole known parent of `Charlie`.
-
-The child is a person.
-
-Multiple children MAY be declared for a single union.
-
----
-
-## 8. Annotations
-
-### 8.1 Annotation Syntax
-
-An annotation line begins with `|`.
-
-Example:
-
-```
-| Born 2002
-```
-
-### 8.2 Annotation Binding
-
-An annotation applies to the immediately preceding entity.
-
-Valid annotation targets are:
-
-- a person
-- a union
-- a child
-
-An annotation with no valid preceding entity is invalid.
-
-### 8.3 Annotation Semantics
-
-Annotation text is opaque.
-
-Parsers MUST NOT infer meaning from annotation content.
-
-Tools MAY recognize annotation conventions.
-
----
-
-## 9. Ordering Rules
-
-Unions apply forward until a new union is declared.
-
-Children apply to the most recent union.
-
-Annotations apply only to the immediately preceding entity.
-
-The same person MAY appear multiple times in the file.
-
----
-
-## 10. Rendering Guidance
-
-Renderers MAY treat the first annotation of a union as a display label.
-
-Renderers MAY vary visual styling based on annotation content.
-
-Renderers MAY use file order as a layout hint.
-
-Renderers SHOULD visually distinguish unknown persons.
-
-These behaviors do not affect validity.
-
----
-
-## 11. Error Handling
-
-A parser MUST reject or report:
-- a standalone child declaration without a preceding union
-- an annotation without a valid preceding entity
-- a union with fewer than two persons
-
-A parser MAY recover from errors where possible.
-
----
-
-## 12. Stability and Extensions
-
-This specification defines the core language.
-
-Extensions SHOULD prefer conventions and annotations over new syntax.
-
-Backwards compatibility is a goal but not guaranteed prior to version 1.0.
-
----
-
-## 13. Minimal Example
-
-```
-Alex + Barbara
-| Married 2001
-= Charlie
-| Born 2002
-
-Charlie + Felicity
-= Gertrude
-
-?
-| Unknown individual
-```
-
----
-
-## Closing note
-
-This spec is intentionally conservative.
-Most semantic meaning is deferred to tooling and rendering layers.
+Extensions to Kin should favor conventions and annotations over adding new syntax symbols. If you find a layout rendering bug or have an idea for canvas controls, feel free to open an issue!
