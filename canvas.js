@@ -1,5 +1,5 @@
-import { layoutFamilyTree } from "./layout.js";
-
+import { layoutFamilyTree } from "./layout/index.js";
+  
 export function createCanvasPreview(canvas) {
   const ctx = canvas?.getContext("2d");
   let currentAst = null;
