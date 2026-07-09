@@ -5,13 +5,27 @@ import { tokenize } from "./kin/tokenize.js";
 import { parse } from "./kin/parse.js";
 
 const editor = $("#editor");
+const lineNumberGutter = $("#line-number-gutter");
 const highlightLayer = $("#highlight-layer");
 const canvas = $("#preview-canvas");
 const themeToggle = $("#theme-toggle");
 // const tokenDebug = $("#token-debug");
 
+function buildLineNumberMarkup(source) {
+  const lineCount = Math.max(1, source.split("\n").length);
+  return Array.from({ length: lineCount }, (_, index) => String(index + 1)).join("\n");
+}
+
+function updateLineNumbers() {
+  const source = editor.value || "";
+  lineNumberGutter.textContent = buildLineNumberMarkup(source);
+  lineNumberGutter.scrollTop = editor.scrollTop;
+}
+
 function updateHighlight() {
   const source = editor.value || "";
+  updateLineNumbers();
+  highlightLayer.classList.toggle("ends-with-newline", source.endsWith("\n"));
   highlightLayer.innerHTML = highlightSource(source);
   highlightLayer.scrollTop = editor.scrollTop;
   highlightLayer.scrollLeft = editor.scrollLeft;
@@ -70,6 +84,7 @@ const canvasPreview = createCanvasPreview(canvas);
 
 editor.on("input", syncEditorViews);
 editor.on("scroll", () => {
+  lineNumberGutter.scrollTop = editor.scrollTop;
   highlightLayer.scrollTop = editor.scrollTop;
   highlightLayer.scrollLeft = editor.scrollLeft;
 });

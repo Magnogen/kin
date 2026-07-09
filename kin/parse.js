@@ -27,6 +27,7 @@ export function parse(tokens) {
   const trimLexeme = (token) => (token?.lexeme ?? "").trim();
 
   const errors = [];
+  const warnings = [];
   const statements = [];
   const people = [];
   const peopleByKey = new Map();
@@ -55,6 +56,27 @@ export function parse(tokens) {
       end: Number.isFinite(end) ? end : -1,
       tokenType,
     });
+  };
+
+  const addSemanticWarning = (
+    message,
+    start,
+    end,
+    tokenType = "SEMANTIC",
+    details = null
+  ) => {
+    const warning = {
+      message,
+      start: Number.isFinite(start) ? start : -1,
+      end: Number.isFinite(end) ? end : -1,
+      tokenType,
+    };
+
+    if (details && typeof details === "object") {
+      warning.details = details;
+    }
+
+    warnings.push(warning);
   };
 
   const getPersonLabelById = (personId) => {
@@ -186,6 +208,216 @@ export function parse(tokens) {
       if ((state.get(person.id) || 0) === 0) {
         visit(person.id);
       }
+    }
+
+    if (errors.length) {
+      return;
+    }
+
+    const adjacencyByParent = new Map();
+    const outgoingCountByParent = new Map();
+    const parentIdsByChild = new Map();
+
+    for (const person of people) {
+      adjacencyByParent.set(person.id, new Set());
+      outgoingCountByParent.set(person.id, 0);
+    }
+
+    edges.forEach((edge) => {
+      if (edge.from == null || edge.to == null) return;
+      if (edge.from === edge.to) return;
+
+      if (!adjacencyByParent.has(edge.from)) {
+        adjacencyByParent.set(edge.from, new Set());
+      }
+      const children = adjacencyByParent.get(edge.from);
+      const beforeSize = children.size;
+      children.add(edge.to);
+      if (children.size !== beforeSize) {
+        outgoingCountByParent.set(
+          edge.from,
+          (outgoingCountByParent.get(edge.from) || 0) + 1
+        );
+
+        if (!parentIdsByChild.has(edge.to)) {
+          parentIdsByChild.set(edge.to, new Set());
+        }
+        parentIdsByChild.get(edge.to).add(edge.from);
+      }
+    });
+
+    const generationByPerson = new Map();
+    for (const person of people) {
+      generationByPerson.set(person.id, 0);
+    }
+
+    const maxIterations = Math.max(1, people.length * Math.max(1, edges.length));
+    for (let i = 0; i < maxIterations; i += 1) {
+      let changed = false;
+
+      adjacencyByParent.forEach((childSet, parentId) => {
+        const parentGeneration = generationByPerson.get(parentId) ?? 0;
+        childSet.forEach((childId) => {
+          const childGeneration = generationByPerson.get(childId) ?? 0;
+          const impliedChildGeneration = parentGeneration + 1;
+          if (impliedChildGeneration > childGeneration) {
+            generationByPerson.set(childId, impliedChildGeneration);
+            changed = true;
+          }
+        });
+      });
+
+      if (!changed) {
+        break;
+      }
+    }
+
+    const descendantsMemo = new Map();
+    const collectDescendants = (personId) => {
+      if (descendantsMemo.has(personId)) {
+        return descendantsMemo.get(personId);
+      }
+
+      const descendants = new Set();
+      const directChildren = adjacencyByParent.get(personId) || new Set();
+      directChildren.forEach((childId) => {
+        descendants.add(childId);
+        const nested = collectDescendants(childId);
+        nested.forEach((id) => descendants.add(id));
+      });
+
+      descendantsMemo.set(personId, descendants);
+      return descendants;
+    };
+
+    const warningKeys = new Set();
+
+    const countPathsMemo = new Map();
+    const countPathsBetween = (fromId, targetId) => {
+      const memoKey = `${fromId}->${targetId}`;
+      if (countPathsMemo.has(memoKey)) {
+        return countPathsMemo.get(memoKey);
+      }
+
+      if (fromId === targetId) {
+        countPathsMemo.set(memoKey, 1);
+        return 1;
+      }
+
+      let total = 0;
+      const directChildren = adjacencyByParent.get(fromId) || new Set();
+      directChildren.forEach((childId) => {
+        total += countPathsBetween(childId, targetId);
+      });
+
+      countPathsMemo.set(memoKey, total);
+      return total;
+    };
+
+    for (const person of people) {
+      const childCount = outgoingCountByParent.get(person.id) || 0;
+      if (childCount < 1) {
+        continue;
+      }
+
+      const introStart = person.firstStart;
+      if (!Number.isFinite(introStart)) {
+        continue;
+      }
+
+      const descendants = collectDescendants(person.id);
+      if (!descendants.size) {
+        continue;
+      }
+
+      const alreadyIntroducedDescendants = [...descendants].filter((descendantId) => {
+        const descendant = people[descendantId];
+        return Number.isFinite(descendant?.firstStart) && descendant.firstStart < introStart;
+      });
+
+      if (!alreadyIntroducedDescendants.length) {
+        continue;
+      }
+
+      const personGeneration = generationByPerson.get(person.id) ?? 0;
+      const maxEarlierDescendantGeneration = Math.max(
+        ...alreadyIntroducedDescendants.map((descendantId) => generationByPerson.get(descendantId) ?? 0)
+      );
+      const generationsBackfilled = maxEarlierDescendantGeneration - personGeneration;
+
+      if (generationsBackfilled < 2) {
+        continue;
+      }
+
+      const key = `${person.id}:${introStart}`;
+      if (warningKeys.has(key)) {
+        continue;
+      }
+      warningKeys.add(key);
+
+      const label = getPersonLabelById(person.id);
+      const earlierDescendantInfo = alreadyIntroducedDescendants.map((descendantId) => ({
+        id: descendantId,
+        label: getPersonLabelById(descendantId),
+        firstStart: people[descendantId]?.firstStart ?? -1,
+        generation: generationByPerson.get(descendantId) ?? 0,
+      }));
+
+      const duplicateLabelBuckets = new Map();
+      earlierDescendantInfo.forEach((item) => {
+        if (!duplicateLabelBuckets.has(item.label)) {
+          duplicateLabelBuckets.set(item.label, []);
+        }
+        duplicateLabelBuckets.get(item.label).push(item.id);
+      });
+
+      const duplicateLabels = [...duplicateLabelBuckets.entries()]
+        .filter(([, ids]) => ids.length > 1)
+        .map(([dupLabel, ids]) => ({ label: dupLabel, ids }));
+
+      const repeatedDescendantsByPath = alreadyIntroducedDescendants
+        .map((descendantId) => ({
+          id: descendantId,
+          label: getPersonLabelById(descendantId),
+          pathCount: countPathsBetween(person.id, descendantId),
+        }))
+        .filter((entry) => entry.pathCount > 1);
+
+      const mergedDescendants = alreadyIntroducedDescendants
+        .map((descendantId) => {
+          const parentIds = [...(parentIdsByChild.get(descendantId) || new Set())];
+          if (parentIds.length < 2) {
+            return null;
+          }
+
+          return {
+            id: descendantId,
+            label: getPersonLabelById(descendantId),
+            parentIds,
+            parentLabels: parentIds.map((parentId) => getPersonLabelById(parentId)),
+          };
+        })
+        .filter(Boolean);
+
+      const warningDetails = {
+        code: "LATE_ANCESTOR_INTRO",
+        personId: person.id,
+        personLabel: label,
+        generationsBackfilled,
+        earlierDescendantIds: alreadyIntroducedDescendants,
+        earlierDescendantLabels: earlierDescendantInfo.map((item) => item.label),
+        duplicateLabels,
+        repeatedDescendantsByPath,
+        mergedDescendants,
+      };
+
+      addSemanticWarning(
+        `Warning: '${label}' is introduced late as an ancestor ${generationsBackfilled} generations above already-known descendants.`,
+        person.firstStart,
+        person.firstEnd,
+        "LATE_ANCESTOR_INTRO",
+        warningDetails
+      );
     }
   };
 
@@ -480,6 +712,7 @@ export function parse(tokens) {
     singleParentLinks,
     people,
     errors,
+    warnings,
   };
 
 }

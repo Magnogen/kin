@@ -45,17 +45,18 @@ export function createCanvasPreview(canvas) {
   function getThemeColors() {
     const darkMode = document.documentElement.dataset.theme === "dark";
     return {
-      fill: darkMode ? "#0e1827" : "#eef4ff",
-      grid: darkMode ? "#203246" : "#d9e6fa",
-      label: darkMode ? "#d6e4f7" : "#2e415a",
-      annotation: darkMode ? "rgba(214, 228, 247, 0.76)" : "rgba(46, 65, 90, 0.72)",
-      connector: darkMode ? "#87a6cb" : "#6e87ab",
-      personFill: darkMode ? "#16263b" : "#ffffff",
-      personStroke: darkMode ? "#35516f" : "#b9cde8",
-      personUnknownFill: darkMode ? "#252025" : "#fff0f2",
-      personUnknownStroke: darkMode ? "#8b6070" : "#d8949e",
+      fill: darkMode ? "#141920" : "#eef4ff",
+      grid: darkMode ? "#2d3640" : "#d9e6fa",
+      label: darkMode ? "#d7dee7" : "#2e415a",
+      annotation: darkMode ? "rgba(215, 222, 231, 0.74)" : "rgba(46, 65, 90, 0.72)",
+      connector: darkMode ? "#8d9eb4" : "#6e87ab",
+      personFill: darkMode ? "#1c222a" : "#ffffff",
+      personStroke: darkMode ? "#46515e" : "#b9cde8",
+      personUnknownFill: darkMode ? "#262124" : "#fff0f2",
+      personUnknownStroke: darkMode ? "#8a6f78" : "#d8949e",
       unionFill: darkMode ? "#85b8ff" : "#3d7cc7",
       error: darkMode ? "#ff9f9f" : "#bf2f2f",
+      warning: darkMode ? "#ffd48a" : "#a06200",
     };
   }
 
@@ -507,6 +508,40 @@ export function createCanvasPreview(canvas) {
     }
 
     drawTree(ast, colors);
+
+    if (ast.warnings?.length) {
+      ctx.fillStyle = colors.warning;
+      ctx.font = "500 13px IBM Plex Sans, Segoe UI, sans-serif";
+      const warning = ast.warnings[0];
+      ctx.fillText(warning.message, 20, 24);
+
+      const repeatedDescendantsByPath = warning?.details?.repeatedDescendantsByPath || [];
+      const mergedDescendants = warning?.details?.mergedDescendants || [];
+      const duplicateLabels = warning?.details?.duplicateLabels || [];
+      let rootCauseLine = "";
+
+      if (mergedDescendants.length) {
+        const mergedSummary = mergedDescendants
+          .map((entry) => `${entry.label} has multiple parents (${entry.parentLabels.join(", ")})`)
+          .join("; ");
+        rootCauseLine = `Root cause: possible duplicate identity merge -> ${mergedSummary}`;
+      } else if (repeatedDescendantsByPath.length) {
+        const repeatedSummary = repeatedDescendantsByPath
+          .map((entry) => `${entry.label} (id ${entry.id}) via ${entry.pathCount} paths`)
+          .join("; ");
+        rootCauseLine = `Root cause: repeated descendants via multiple paths -> ${repeatedSummary}`;
+      } else if (duplicateLabels.length) {
+        const duplicateSummary = duplicateLabels
+          .map((entry) => `${entry.label} x${entry.ids.length} (ids: ${entry.ids.join(",")})`)
+          .join("; ");
+        rootCauseLine = `Root cause: duplicate descendant labels -> ${duplicateSummary}`;
+      }
+
+      if (rootCauseLine) {
+        ctx.font = "500 12px IBM Plex Sans, Segoe UI, sans-serif";
+        ctx.fillText(rootCauseLine, 20, 40);
+      }
+    }
   }
 
   function redraw() {
