@@ -105,6 +105,17 @@ export function orderUnionComponentForGeneration(
     return aSort - bSort;
   });
 
+  const unionOrderBySignature = new Map();
+  let nextUnionOrder = 0;
+  const getUnionOrder = (members) => {
+    const signature = [...members].sort((a, b) => a - b).join(":");
+    if (!unionOrderBySignature.has(signature)) {
+      unionOrderBySignature.set(signature, nextUnionOrder);
+      nextUnionOrder += 1;
+    }
+    return unionOrderBySignature.get(signature);
+  };
+
   let anchorId = null;
   let anchorDegree = 1;
   orderedBySortIndex.forEach((personId) => {
@@ -117,6 +128,71 @@ export function orderUnionComponentForGeneration(
 
   if (anchorId == null) {
     return orderedBySortIndex;
+  }
+
+  const partnerOnlyUnions = componentUnions
+    .map((members) => {
+      if (!members.includes(anchorId) || members.length !== 2) {
+        return null;
+      }
+
+      const partnerId = members.find((personId) => personId !== anchorId);
+      if (partnerId == null) {
+        return null;
+      }
+
+      return {
+        partnerId,
+        order: getUnionOrder(members),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.order - b.order);
+
+  const partnerIds = [...new Set(partnerOnlyUnions.map((entry) => entry.partnerId))];
+  const fanoutEligible =
+    anchorDegree > 1 &&
+    partnerIds.length > 1 &&
+    partnerIds.length === anchorDegree;
+
+  if (fanoutEligible) {
+    const seen = new Set([anchorId]);
+    const left = [];
+    const right = [];
+    let placeRight = true;
+
+    partnerIds.forEach((partnerId) => {
+      if (seen.has(partnerId)) {
+        return;
+      }
+
+      if (placeRight) {
+        right.push(partnerId);
+      } else {
+        left.unshift(partnerId);
+      }
+
+      seen.add(partnerId);
+      placeRight = !placeRight;
+    });
+
+    let spillLeft = false;
+    orderedBySortIndex.forEach((personId) => {
+      if (seen.has(personId)) {
+        return;
+      }
+
+      if (spillLeft) {
+        left.unshift(personId);
+      } else {
+        right.push(personId);
+      }
+
+      seen.add(personId);
+      spillLeft = !spillLeft;
+    });
+
+    return [...left, anchorId, ...right];
   }
 
   const seen = new Set([anchorId]);

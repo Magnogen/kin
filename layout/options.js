@@ -13,6 +13,7 @@ export const DEFAULT_LAYOUT_OPTIONS = {
   generationGap: 64,
   unionSize: 16,
   unionOffsetY: 0,
+  partnerFanoutStep: 64,
   paddingX: 24,
   paddingY: 24,
   iterations: 8,

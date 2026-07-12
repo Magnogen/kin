@@ -148,6 +148,43 @@ export function createCanvasPreview(canvas) {
     ctx.closePath();
   }
 
+  function getRectBoundaryPoint(centerX, centerY, width, height, targetX, targetY) {
+    const halfWidth = width / 2;
+    const halfHeight = height / 2;
+    const deltaX = targetX - centerX;
+    const deltaY = targetY - centerY;
+
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY) || (deltaX === 0 && deltaY === 0)) {
+      return { x: centerX, y: centerY };
+    }
+
+    const scale = Math.min(halfWidth / Math.abs(deltaX), halfHeight / Math.abs(deltaY));
+    return {
+      x: centerX + deltaX * scale,
+      y: centerY + deltaY * scale,
+    };
+  }
+
+  function getCircleBoundaryPoint(centerX, centerY, radius, targetX, targetY) {
+    const deltaX = targetX - centerX;
+    const deltaY = targetY - centerY;
+
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY) || (deltaX === 0 && deltaY === 0)) {
+      return { x: centerX, y: centerY };
+    }
+
+    const distance = Math.hypot(deltaX, deltaY);
+    if (!Number.isFinite(distance) || distance === 0) {
+      return { x: centerX, y: centerY };
+    }
+
+    const scale = radius / distance;
+    return {
+      x: centerX + deltaX * scale,
+      y: centerY + deltaY * scale,
+    };
+  }
+
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
@@ -370,22 +407,41 @@ export function createCanvasPreview(canvas) {
       if (!from || !to) return;
 
       const fromCenterX = mapX(from.x + from.width / 2);
+      const fromCenterY = mapY(from.y + from.height / 2);
       const toCenterX = mapX(to.x + to.width / 2);
+      const toCenterY = mapY(to.y + to.height / 2);
 
       let fromX = fromCenterX;
       let toX = toCenterX;
 
-      let fromY;
-      let toY;
+      let fromY = fromCenterY;
+      let toY = toCenterY;
       if (edge.type === "member") {
-        fromX = fromCenterX < toCenterX ? mapX(from.x + from.width) : mapX(from.x);
-        fromY = mapY(from.y + from.height / 2);
-        toY = mapY(to.y + to.height / 2);
+        const sourcePoint = getRectBoundaryPoint(
+          fromCenterX,
+          fromCenterY,
+          from.width * scale,
+          from.height * scale,
+          toCenterX,
+          toCenterY
+        );
+        const targetPoint = getCircleBoundaryPoint(
+          toCenterX,
+          toCenterY,
+          (to.width * scale) / 2,
+          fromCenterX,
+          fromCenterY
+        );
+
+        fromX = sourcePoint.x;
+        fromY = sourcePoint.y;
+        toX = targetPoint.x;
+        toY = targetPoint.y;
       } else if (edge.type === "singleParent") {
         fromY = mapY(from.y + from.height);
         toY = mapY(to.y);
       } else {
-        fromY = mapY(from.y + from.height / 2);
+        fromY = fromCenterY;
         toY = mapY(to.y);
       }
 

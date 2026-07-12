@@ -12,6 +12,173 @@ import {
   computeChildGroupSpanWidth,
 } from "./child-groups.js";
 
+function buildHexRingSlots(count, baseStep) {
+  if (!(count > 0)) return [];
+
+  const step = Math.max(1, baseStep);
+  const slots = [];
+  const axialDirections = [
+    [1, 0],
+    [1, -1],
+    [0, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, 1],
+  ];
+
+  let ring = 1;
+  while (slots.length < count) {
+    const ringCoords = [];
+
+    let q = -ring;
+    let r = ring;
+
+    for (let side = 0; side < 6; side += 1) {
+      const [dq, dr] = axialDirections[side];
+      for (let i = 0; i < ring; i += 1) {
+        const x = step * (q + r / 2);
+        const y = step * 0.8660254037844386 * r;
+        ringCoords.push({ x, y });
+        q += dq;
+        r += dr;
+      }
+    }
+
+    ringCoords.sort((a, b) => {
+      const aAngle = (Math.PI * 2 - Math.atan2(a.y, a.x)) % (Math.PI * 2);
+      const bAngle = (Math.PI * 2 - Math.atan2(b.y, b.x)) % (Math.PI * 2);
+      return aAngle - bAngle;
+    });
+
+    // Fill each ring in opposite pairs so declaration order expands evenly around anchor.
+    const half = Math.floor(ringCoords.length / 2);
+    const ordered = [];
+    for (let i = 0; i < half; i += 1) {
+      ordered.push(ringCoords[i]);
+      ordered.push(ringCoords[i + half]);
+    }
+
+    if (ringCoords.length % 2 === 1) {
+      ordered.push(ringCoords[ringCoords.length - 1]);
+    }
+
+    slots.push(...ordered);
+    ring += 1;
+  }
+
+  return slots.slice(0, count);
+}
+
+function buildPartnerFanoutLayout(
+  unions,
+  personGeneration,
+  personX,
+  people,
+  fanoutStep
+) {
+  const byAnchor = new Map();
+
+  const addAnchorPartner = (anchorId, partnerId, unionOrder) => {
+    if (!byAnchor.has(anchorId)) {
+      byAnchor.set(anchorId, []);
+    }
+    byAnchor.get(anchorId).push({ partnerId, unionOrder });
+  };
+
+  unions.forEach((union, unionOrder) => {
+    const members = union.members || [];
+    if (members.length !== 2) {
+      return;
+    }
+
+    const first = members[0]?.personId;
+    const second = members[1]?.personId;
+    if (first == null || second == null || first === second) {
+      return;
+    }
+
+    const firstGeneration = personGeneration.get(first);
+    const secondGeneration = personGeneration.get(second);
+    if (firstGeneration == null || secondGeneration == null || firstGeneration !== secondGeneration) {
+      return;
+    }
+
+    addAnchorPartner(first, second, unionOrder);
+    addAnchorPartner(second, first, unionOrder);
+  });
+
+  const candidates = [];
+
+  byAnchor.forEach((entries, anchorId) => {
+    const seen = new Set();
+    const orderedPartners = [];
+
+    entries
+      .sort((a, b) => a.unionOrder - b.unionOrder)
+      .forEach((entry) => {
+        if (seen.has(entry.partnerId)) {
+          return;
+        }
+        seen.add(entry.partnerId);
+        orderedPartners.push(entry.partnerId);
+      });
+
+    if (orderedPartners.length < 3) {
+      return;
+    }
+
+    candidates.push({
+      anchorId,
+      partners: orderedPartners,
+      sortIndex: people.get(anchorId)?.sortIndex ?? anchorId,
+    });
+  });
+
+  candidates.sort((a, b) => {
+    if (b.partners.length !== a.partners.length) {
+      return b.partners.length - a.partners.length;
+    }
+    return a.sortIndex - b.sortIndex;
+  });
+
+  const positionOverrides = new Map();
+  const yOffsets = new Map();
+  const consumed = new Set();
+
+  candidates.forEach((candidate) => {
+    if (consumed.has(candidate.anchorId)) {
+      return;
+    }
+
+    const anchorX = personX.get(candidate.anchorId);
+    if (!Number.isFinite(anchorX)) {
+      return;
+    }
+
+    const partners = candidate.partners.filter((partnerId) => !consumed.has(partnerId));
+    if (partners.length < 3) {
+      return;
+    }
+
+    const slots = buildHexRingSlots(partners.length, fanoutStep);
+    partners.forEach((partnerId, index) => {
+      const slot = slots[index];
+      if (!slot) {
+        return;
+      }
+
+      positionOverrides.set(partnerId, anchorX + slot.x);
+      yOffsets.set(partnerId, slot.y);
+      consumed.add(partnerId);
+    });
+  });
+
+  return {
+    positionOverrides,
+    yOffsets,
+  };
+}
+
 export function layoutFamilyTree(ast, userOptions = {}) {
   const options = { ...DEFAULT_LAYOUT_OPTIONS, ...userOptions };
   const people = collectPeople(ast || {});
@@ -234,6 +401,14 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     const centers = members.map((member) => personX.get(member.personId) ?? 0);
     if (!centers.length) return 0;
 
+    const getGenerationCenterX = (generation) => {
+      const personIds = generations.get(generation) || [];
+      const generationCenters = personIds
+        .map((personId) => personX.get(personId) ?? 0)
+        .filter((value) => Number.isFinite(value));
+      return average(generationCenters);
+    };
+
     if (members.length === 2) {
       const [first, second] = members;
       const firstCenter = personX.get(first.personId) ?? 0;
@@ -255,7 +430,50 @@ export function layoutFamilyTree(ast, userOptions = {}) {
 
       const innerLeftEdge = leftCenter + leftWidth / 2;
       const innerRightEdge = rightCenter - rightWidth / 2;
-      return (innerLeftEdge + innerRightEdge) / 2;
+
+      const generation = personGeneration.get(first.personId) ?? 0;
+      const generationCenterX = getGenerationCenterX(generation);
+      const leftDeviation = Math.abs(leftCenter - generationCenterX);
+      const rightDeviation = Math.abs(rightCenter - generationCenterX);
+      const outerOnRight = rightDeviation >= leftDeviation;
+
+      const span = Math.abs(secondCenter - firstCenter);
+      const spanFactor = Math.max(
+        0,
+        Math.min(1, (span - nominalCenterGap) / Math.max(1, nominalCenterGap))
+      );
+      const bias = 0.5 + spanFactor * 0.18;
+
+      return outerOnRight
+        ? innerLeftEdge + (innerRightEdge - innerLeftEdge) * bias
+        : innerRightEdge - (innerRightEdge - innerLeftEdge) * bias;
+    }
+
+    return average(centers);
+  };
+
+  const getPersonCenterY = (personId) => {
+    const generation = personGeneration.get(personId) ?? 0;
+    const topY =
+      (generationTop.get(generation) ?? options.paddingY) +
+      (generationYOffsetShift.get(generation) ?? 0) +
+      getFinalPersonYOffset(personId);
+    const height = personHeightById.get(personId) ?? options.personHeight;
+    return topY + height / 2;
+  };
+
+  const getUnionCenterY = (union) => {
+    const members = union.members || [];
+    const centers = members.map((member) => getPersonCenterY(member.personId));
+    if (!centers.length) {
+      return options.paddingY + options.personHeight / 2;
+    }
+
+    if (members.length === 2) {
+      const [first, second] = members;
+      const firstCenter = getPersonCenterY(first.personId);
+      const secondCenter = getPersonCenterY(second.personId);
+      return (firstCenter + secondCenter) / 2;
     }
 
     return average(centers);
@@ -360,29 +578,6 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     unionX.set(union.id, getUnionCenterX(union));
   });
 
-  const generationHeight = new Map();
-
-  generationKeys.forEach((generation) => {
-    const personIds = generations.get(generation) || [];
-    let maxHeight = options.personHeight;
-
-    personIds.forEach((personId) => {
-      const height = personHeightById.get(personId) ?? options.personHeight;
-      personHeightById.set(personId, height);
-      const yOffset = seededGroupedChildLayout.yOffsets.get(personId) ?? 0;
-      maxHeight = Math.max(maxHeight, yOffset + height);
-    });
-
-    generationHeight.set(generation, maxHeight);
-  });
-
-  const generationTop = new Map();
-  let cursorY = options.paddingY;
-  generationKeys.forEach((generation) => {
-    generationTop.set(generation, cursorY);
-    cursorY += (generationHeight.get(generation) ?? options.personHeight) + options.generationGap;
-  });
-
   const groupedChildLayout = buildGroupedChildLayout(
     unions,
     singleParentLinks,
@@ -399,6 +594,154 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     personX.set(personId, centerX);
   });
 
+  const partnerFanoutLayout = buildPartnerFanoutLayout(
+    unions,
+    personGeneration,
+    personX,
+    people,
+    Number.isFinite(options.partnerFanoutStep) && options.partnerFanoutStep > 0
+      ? options.partnerFanoutStep
+      : nominalCenterGap
+  );
+
+  partnerFanoutLayout.positionOverrides.forEach((centerX, personId) => {
+    personX.set(personId, centerX);
+  });
+
+  unions.forEach((union) => {
+    unionX.set(union.id, getUnionCenterX(union));
+  });
+
+  const getFinalPersonYOffset = (personId) => {
+    const groupedYOffset = groupedChildLayout.yOffsets.get(personId) ?? 0;
+    const fanoutYOffset = partnerFanoutLayout.yOffsets.get(personId) ?? 0;
+    return groupedYOffset + fanoutYOffset;
+  };
+
+  const enforceCenterGapByWidthWithVerticalSeparation = (personIds) => {
+    if (!personIds.length) {
+      return;
+    }
+
+    const ordered = [...personIds]
+      .map((personId) => {
+        const width = personWidthById.get(personId) ?? options.personWidth;
+        const center = personX.get(personId) ?? 0;
+        const top = getFinalPersonYOffset(personId);
+        const height = personHeightById.get(personId) ?? options.personHeight;
+        return {
+          personId,
+          width,
+          center,
+          top,
+          bottom: top + height,
+        };
+      })
+      .sort((a, b) => {
+        const delta = a.center - b.center;
+        if (delta !== 0) return delta;
+        return a.personId - b.personId;
+      });
+
+    const overlapsVertically = (a, b) =>
+      Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0;
+
+    const targetMean = average(ordered.map((item) => item.center));
+
+    for (let i = 1; i < ordered.length; i += 1) {
+      const current = ordered[i];
+      let minCenter = -Infinity;
+
+      for (let j = 0; j < i; j += 1) {
+        const prev = ordered[j];
+        if (!overlapsVertically(prev, current)) {
+          continue;
+        }
+        minCenter = Math.max(
+          minCenter,
+          prev.center + (prev.width + current.width) / 2 + options.personGap
+        );
+      }
+
+      if (current.center < minCenter) {
+        current.center = minCenter;
+      }
+    }
+
+    const shiftedMean = average(ordered.map((item) => item.center));
+    const meanShift = targetMean - shiftedMean;
+    if (Number.isFinite(meanShift) && Math.abs(meanShift) > 1e-6) {
+      ordered.forEach((item) => {
+        item.center += meanShift;
+      });
+
+      for (let i = 1; i < ordered.length; i += 1) {
+        const current = ordered[i];
+        let minCenter = -Infinity;
+
+        for (let j = 0; j < i; j += 1) {
+          const prev = ordered[j];
+          if (!overlapsVertically(prev, current)) {
+            continue;
+          }
+          minCenter = Math.max(
+            minCenter,
+            prev.center + (prev.width + current.width) / 2 + options.personGap
+          );
+        }
+
+        if (current.center < minCenter) {
+          current.center = minCenter;
+        }
+      }
+    }
+
+    ordered.forEach((item) => {
+      personX.set(item.personId, item.center);
+    });
+  };
+
+  generationKeys.forEach((generation) => {
+    const personIds = generations.get(generation) || [];
+    enforceCenterGapByWidthWithVerticalSeparation(personIds);
+  });
+
+  unions.forEach((union) => {
+    unionX.set(union.id, getUnionCenterX(union));
+  });
+
+  const generationMinYOffset = new Map();
+  const generationMaxBottom = new Map();
+  const generationHeight = new Map();
+
+  generationKeys.forEach((generation) => {
+    const personIds = generations.get(generation) || [];
+    let minYOffset = 0;
+    let maxBottom = options.personHeight;
+
+    personIds.forEach((personId) => {
+      const height = personHeightById.get(personId) ?? options.personHeight;
+      personHeightById.set(personId, height);
+
+      const yOffset = getFinalPersonYOffset(personId);
+      minYOffset = Math.min(minYOffset, yOffset);
+      maxBottom = Math.max(maxBottom, yOffset + height);
+    });
+
+    generationMinYOffset.set(generation, minYOffset);
+    generationMaxBottom.set(generation, maxBottom);
+    generationHeight.set(generation, maxBottom - minYOffset);
+  });
+
+  const generationTop = new Map();
+  const generationYOffsetShift = new Map();
+  let cursorY = options.paddingY;
+  generationKeys.forEach((generation) => {
+    generationTop.set(generation, cursorY);
+    generationYOffsetShift.set(generation, -(generationMinYOffset.get(generation) ?? 0));
+    cursorY += (generationHeight.get(generation) ?? options.personHeight) + options.generationGap;
+  });
+
   const nodes = [];
   const edges = [];
 
@@ -409,7 +752,8 @@ export function layoutFamilyTree(ast, userOptions = {}) {
     const x = options.paddingX + centerX - width / 2;
     const y =
       (generationTop.get(generation) ?? options.paddingY) +
-      (seededGroupedChildLayout.yOffsets.get(personId) ?? 0);
+      (generationYOffsetShift.get(generation) ?? 0) +
+      getFinalPersonYOffset(personId);
     const meta = people.get(personId);
     const annotations = personAnnotationsById.get(personId) || [];
     const height = personHeightById.get(personId) ?? options.personHeight;
@@ -432,10 +776,7 @@ export function layoutFamilyTree(ast, userOptions = {}) {
   unions.forEach((union) => {
     const generation = unionGeneration.get(union.id) ?? 0;
     const centerX = options.paddingX + (unionX.get(union.id) ?? 0);
-    const centerY =
-      (generationTop.get(generation) ?? options.paddingY) +
-      (generationHeight.get(generation) ?? options.personHeight) / 2 +
-      options.unionOffsetY;
+    const centerY = getUnionCenterY(union) + options.unionOffsetY;
 
     const x = centerX - options.unionSize / 2;
     const y = centerY - options.unionSize / 2;
