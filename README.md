@@ -35,10 +35,10 @@ Kin's parser relies on four simple character markers:
 
 | Operator | Name | Example | Description |
 |---|---|---|---|
-| + | **Union** | Alex + Barbara | Establishes a relationship context between two or more people. |
-| = | **Child** | = Charlie | Attaches a child to the preceding union context (or single parent). |
-| | | **Annotation** | | Born 1950 | Attaches free-form metadata/notes to the immediate line above it. |
-| ? | **Unknown** | ? 1 + David | Represents a person whose identity is currently unknown. |
+| `+` | **Union** | `Alex + Barbara` | Establishes a relationship context between two or more people. |
+| `=` | **Child** | `= Charlie` | Attaches a child to the preceding union context (or single parent). |
+| `\|` | **Annotation** | `\| Born 1950` | Attaches free-form metadata/notes to the immediate line above it. |
+| `?` | **Unknown** | `? 1 + David` | Represents a person whose identity is currently unknown. |
 
 ### Layout Rules to Remember
 
