@@ -1,0 +1,64 @@
+# Test 1: Multiple annotations on same person
+a + b
+= c
+| annotation 1
+| annotation 2
+
+# Test 2: Annotation on union
+x + y
+| married in 2000
+= z
+
+# Test 3: Annotation on standalone person
+Alice
+| born 1950
+
+# Test 4: Single-parent with annotation
+Bob = Charlie
+| illegitimate
+
+# Test 5: Multiple children with different annotations
+Parent1 + Parent2
+= Child1
+| first child
+= Child2
+| second child
+
+# Test 6: Longer annotation text
+David + Eve
+| They met in college and stayed together
+= Frank
+| born during their reunion tour
+
+# Test 7: Repeated single-parent with different annotations  
+Iris = Jack
+| first mention
+Iris = Jack
+| second mention
+
+# Test 8: Person first as child, then standalone
+= Karen
+| introduced as child
+Karen
+| later as standalone
+
+# Test 9: Union member annotations
+Liam + Mia
+| union annotation
+= Nora
+| child annotation
+
+# Test 10: Same child from different unions
+Oscar + Pam
+= Quinn
+| from Oscar\+Pam
+Quentin + Rita
+= Quinn
+| from Quentin\+Rita
+
+# Test 11: Verify person order doesn't affect duplicate annotations
+Sam
+| standalone
++ Taylor
+= Sam Jr
+| as child

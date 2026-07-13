@@ -65,6 +65,14 @@ export function tokenize(source) {
     if (c === "?") {
       while (!eof()) {
         const next = peek();
+        
+        // Handle escape sequences: \+, \=, \|, \?
+        if (next === "\\" && peek(1) && "+=|?".includes(peek(1))) {
+          advance(); // consume backslash
+          advance(); // consume escaped character
+          continue;
+        }
+        
         if (next === "\n" || next === "+" || next === "=" || next === "|" || next === "#") {
           break;
         }
@@ -83,6 +91,14 @@ export function tokenize(source) {
     if (isAlphaNum(c)) {
       while (!eof()) {
         const next = peek();
+        
+        // Handle escape sequences: \+, \=, \|, \?
+        if (next === "\\" && peek(1) && "+=|?".includes(peek(1))) {
+          advance(); // consume backslash
+          advance(); // consume escaped character
+          continue;
+        }
+        
         if (next === "\n" || next === "+" || next === "=" || next === "|" || next === "#" || next === "?") {
           break;
         }

@@ -25,6 +25,10 @@ export function parse(tokens) {
 
   const isPersonToken = (token) => token?.type === "TEXT" || token?.type === "UNKNOWN";
   const trimLexeme = (token) => (token?.lexeme ?? "").trim();
+  const unescapeText = (text) => {
+    if (!text) return text;
+    return text.replace(/\\([+=|?])/g, "$1");
+  };
 
   const errors = [];
   const warnings = [];
@@ -429,6 +433,54 @@ export function parse(tokens) {
 
   const buildSingleParentKey = (parent, child) => `${parent.personId}>${child.personId}`;
 
+  const createUnionFromMembers = (members) => {
+    if (members.length < 2) {
+      addError("Union declaration must contain at least two persons.", peek(-1));
+      return null;
+    }
+
+    const unionKey = buildUnionKey(members);
+    let union = unionsByKey.get(unionKey);
+
+    if (!union) {
+      union = {
+        type: "UnionDeclaration",
+        id: unions.length,
+        members,
+        children: [],
+        annotations: [],
+        start: members[0]?.start ?? peek(-1)?.start ?? -1,
+        end: members[members.length - 1]?.end ?? peek(-1)?.end ?? -1,
+        key: unionKey,
+        occurrences: [],
+      };
+
+      unionsByKey.set(unionKey, union);
+      unions.push(union);
+      statements.push(union);
+    } else {
+      const unionReference = {
+        type: "UnionReference",
+        unionId: union.id,
+        members,
+        start: members[0]?.start ?? peek(-1)?.start ?? -1,
+        end: members[members.length - 1]?.end ?? peek(-1)?.end ?? -1,
+      };
+      statements.push(unionReference);
+    }
+
+    union.occurrences.push({
+      start: members[0]?.start ?? peek(-1)?.start ?? -1,
+      end: members[members.length - 1]?.end ?? peek(-1)?.end ?? -1,
+    });
+
+    currentUnion = union;
+    currentSingleParent = null;
+    lastEntity = union;
+    
+    return union;
+  };
+
   const addSingleParentLink = (parent, child, start, end) => {
     if (!parent || !child) {
       return null;
@@ -478,7 +530,7 @@ export function parse(tokens) {
     advance();
 
     const kind = token.type === "UNKNOWN" ? "unknown" : "named";
-    const value = trimLexeme(token);
+    const value = unescapeText(trimLexeme(token));
     const key = `${kind}:${value}`;
 
     let canonicalPerson = peopleByKey.get(key);
@@ -517,7 +569,7 @@ export function parse(tokens) {
     };
   };
 
-  const attachAnnotationToPerson = (personRef, text) => {
+  const attachAnnotationToPerson = (personRef, text, isStandalone = false) => {
     if (!personRef || !text) return;
 
     if (!personRef.annotations) {
@@ -525,12 +577,16 @@ export function parse(tokens) {
     }
     personRef.annotations.push(text);
 
-    const canonical = people[personRef.personId];
-    if (!canonical) return;
-    if (!canonical.annotations) {
-      canonical.annotations = [];
+    // For standalone people (PersonDeclaration), also add to canonical person
+    // For children/members in unions, don't add to canonical to avoid duplication during layout
+    if (isStandalone) {
+      const canonical = people[personRef.personId];
+      if (!canonical) return;
+      if (!canonical.annotations) {
+        canonical.annotations = [];
+      }
+      canonical.annotations.push(text);
     }
-    canonical.annotations.push(text);
   };
 
   while (!eof()) {
@@ -574,7 +630,7 @@ export function parse(tokens) {
       let text = "";
 
       if (isPersonToken(peek())) {
-        text = trimLexeme(advance());
+        text = unescapeText(trimLexeme(advance()));
       }
 
       const node = {
@@ -595,17 +651,31 @@ export function parse(tokens) {
         annotationTarget.annotations.push(text);
 
         if (annotationTarget.type === "ChildDeclaration") {
-          attachAnnotationToPerson(annotationTarget.child, text);
+          attachAnnotationToPerson(annotationTarget.child, text, false);
         } else if (annotationTarget.type === "PersonDeclaration") {
-          attachAnnotationToPerson(annotationTarget.person, text);
+          attachAnnotationToPerson(annotationTarget.person, text, true);
         } else if (annotationTarget.type === "SingleParentDeclaration") {
-          attachAnnotationToPerson(annotationTarget.child, text);
+          attachAnnotationToPerson(annotationTarget.child, text, true);
         } else if (annotationTarget.type === "SingleParentReference") {
-          attachAnnotationToPerson(annotationTarget.child, text);
+          attachAnnotationToPerson(annotationTarget.child, text, false);
         }
       }
 
       statements.push(node);
+      
+      // Allow union formation after annotation on PersonDeclaration (e.g., "a | comment + b")
+      if (annotationTarget?.type === "PersonDeclaration" && check("PLUS")) {
+        const firstPerson = annotationTarget.person;
+        const members = [firstPerson];
+        
+        while (match("PLUS")) {
+          const nextPerson = readPerson("Expected a person after '+'.");
+          if (nextPerson) members.push(nextPerson);
+        }
+        
+        createUnionFromMembers(members);
+      }
+      
       continue;
     }
 
@@ -621,48 +691,7 @@ export function parse(tokens) {
       }
 
       if (sawPlus) {
-        if (members.length < 2) {
-          addError("Union declaration must contain at least two persons.", peek(-1));
-        }
-
-        const unionKey = buildUnionKey(members);
-        let union = unionsByKey.get(unionKey);
-
-        if (!union) {
-          union = {
-            type: "UnionDeclaration",
-            id: unions.length,
-            members,
-            children: [],
-            annotations: [],
-            start: members[0]?.start ?? peek(-1)?.start ?? -1,
-            end: members[members.length - 1]?.end ?? peek(-1)?.end ?? -1,
-            key: unionKey,
-            occurrences: [],
-          };
-
-          unionsByKey.set(unionKey, union);
-          unions.push(union);
-          statements.push(union);
-        } else {
-          const unionReference = {
-            type: "UnionReference",
-            unionId: union.id,
-            members,
-            start: members[0]?.start ?? peek(-1)?.start ?? -1,
-            end: members[members.length - 1]?.end ?? peek(-1)?.end ?? -1,
-          };
-          statements.push(unionReference);
-        }
-
-        union.occurrences.push({
-          start: members[0]?.start ?? peek(-1)?.start ?? -1,
-          end: members[members.length - 1]?.end ?? peek(-1)?.end ?? -1,
-        });
-
-        currentUnion = union;
-        currentSingleParent = null;
-        lastEntity = union;
+        createUnionFromMembers(members);
       } else if (match("EQUAL")) {
         const opToken = peek(-1);
         const child = readPerson("Expected a person after '='.");

@@ -3,7 +3,14 @@ import { layoutFamilyTree } from "./layout/index.js";
 export function createCanvasPreview(canvas) {
   const ctx = canvas?.getContext("2d");
   let currentAst = null;
+  let currentSource = "";
   let currentViewport = null;
+
+  const getLineNumberFromPosition = (charPosition) => {
+    if (charPosition < 0 || !currentSource) return 1;
+    const lineCount = currentSource.slice(0, charPosition).split("\n").length;
+    return lineCount;
+  };
 
   const viewState = {
     zoom: 1,
@@ -559,7 +566,9 @@ export function createCanvasPreview(canvas) {
       drawNoData(colors, "Parse errors found");
       ctx.fillStyle = colors.error;
       ctx.font = "500 13px IBM Plex Sans, Segoe UI, sans-serif";
-      ctx.fillText(ast.errors[0].message, 20, 52);
+      const error = ast.errors[0];
+      const lineNum = getLineNumberFromPosition(error.start);
+      ctx.fillText(`Line ${lineNum}: ${error.message}`, 20, 52);
       return;
     }
 
@@ -607,8 +616,9 @@ export function createCanvasPreview(canvas) {
     drawAst(currentAst, colors);
   }
 
-  function render(ast) {
+  function render(ast, source = "") {
     currentAst = ast;
+    currentSource = source;
     redraw();
   }
 
