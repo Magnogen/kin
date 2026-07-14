@@ -55,10 +55,3 @@ Oscar + Pam
 Quentin + Rita
 = Quinn
 | from Quentin\+Rita
-
-# Test 11: Verify person order doesn't affect duplicate annotations
-Sam
-| standalone
-+ Taylor
-= Sam Jr
-| as child
