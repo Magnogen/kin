@@ -13,6 +13,10 @@ function wrapToken(type, text) {
   return `<span class="token token-${type}">${escapeHtml(text)}</span>`;
 }
 
+function isEscapableTokenChar(char) {
+  return char === "+" || char === "=" || char === "|" || char === "?";
+}
+
 function shouldStopAtSpace(source, index) {
   if (source[index] !== " ") {
     return false;
@@ -25,6 +29,12 @@ function shouldStopAtSpace(source, index) {
 function readUntilBoundary(source, index, extraStops = []) {
   while (index < source.length) {
     const next = source[index];
+
+    if (next === "\\" && isEscapableTokenChar(source[index + 1])) {
+      index += 2;
+      continue;
+    }
+
     if (next === "#" || next === "+" || next === "=" || next === "|" || next === "\n" || extraStops.includes(next)) {
       break;
     }
@@ -57,6 +67,12 @@ export function highlightSource(source) {
       }
 
       html += wrapToken("comment", source.slice(start, index));
+      continue;
+    }
+
+    if (char === "\\" && isEscapableTokenChar(source[index + 1])) {
+      html += wrapToken("text", source.slice(index, index + 2));
+      index += 2;
       continue;
     }
 
